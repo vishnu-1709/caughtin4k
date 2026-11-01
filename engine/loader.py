@@ -47,6 +47,8 @@ LINKTYPES = {
 }
 
 FIN, SYN, RST, PSH, ACK = 0x01, 0x02, 0x04, 0x08, 0x10
+# ports whose payload start is kept (bounded) so the clear-text login check can inspect it
+LOGIN_PORTS = {21, 23, 25, 80, 110, 143, 587, 8080}
 
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
@@ -226,13 +228,14 @@ class PacketView:
     __slots__ = (
         "frame", "ts", "length", "link", "eth_src", "eth_dst", "arp",
         "ip_ver", "ip_src", "ip_dst", "ttl", "ip_df", "ip_len",
-        "tcp", "udp", "dns", "dhcp", "icmp", "proto",
+        "tcp", "udp", "dns", "dhcp", "icmp", "proto", "payload",
     )
 
     def __init__(self, pkt: Any, frame: int, ts: float, wirelen: int, link: str) -> None:
         self.frame, self.ts, self.length, self.link = frame, ts, wirelen or len(pkt), link
         self.eth_src = self.eth_dst = None
         self.arp = self.tcp = self.udp = self.dns = self.dhcp = self.icmp = None
+        self.payload: bytes = b""
         self.ip_ver = 0
         self.ip_src = self.ip_dst = None
         self.ttl = self.ip_len = 0
@@ -274,6 +277,8 @@ class PacketView:
             self.tcp = (int(tcp.sport), int(tcp.dport), int(tcp.flags), int(tcp.seq), int(tcp.ack),
                         int(tcp.window), plen)
             self.proto = "TCP"
+            if plen and (self.tcp[0] in LOGIN_PORTS or self.tcp[1] in LOGIN_PORTS):
+                self.payload = bytes(tcp.payload)[:600]
         udp = l4_owner.getlayer(UDP)
         if udp is not None and not isinstance(udp, UDPerror):
             self.udp = (int(udp.sport), int(udp.dport), max(0, int(udp.len or 8) - 8))

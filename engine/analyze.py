@@ -1,6 +1,7 @@
 """One entry point: analyze(path, options) -> Result. Also a sandboxed subprocess runner."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import selectors
@@ -10,6 +11,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable
 
+from . import __version__
 from .config import make_config
 from .context import Context
 from .detectors import all_detectors
@@ -49,6 +51,10 @@ class Result:
     frames: dict[int, tuple[float, str, str, str, str]]
     elapsed: float = 0.0
     partial: bool = False
+    sha256: str = ""
+    activity: list[dict[str, Any]] = field(default_factory=list)
+    conversations: list[dict[str, Any]] = field(default_factory=list)
+    meta: dict[str, Any] = field(default_factory=dict)
 
     @property
     def duration(self) -> float:
@@ -82,6 +88,7 @@ def analyze(path: str, options: dict[str, Any] | None = None,
     cfg = make_config(options.get("config"))
     started = time.monotonic()
     fmt = validate_file(path, cfg["max_file_mb"])
+    digest = file_sha256(path)
     ctx = Context(cfg)
     detectors = all_detectors()
     stats = ReadStats()
@@ -136,7 +143,28 @@ def analyze(path: str, options: dict[str, Any] | None = None,
         frames=frames,
         elapsed=round(time.monotonic() - started, 2),
         partial=bool(stats.stopped_reason or stats.truncated),
+        sha256=digest,
+        activity=ctx.activity_series(),
+        conversations=ctx.top_conversations(),
+        meta={
+            "tool": f"CaughtIn4K {__version__}",
+            "analysed_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "detectors": [d.name for d in detectors],
+            "limits": {k: cfg[k] for k in ("max_file_mb", "max_packets", "max_seconds", "subprocess_timeout",
+                                            "memory_limit_mb")},
+            "stopped_reason": stats.stopped_reason, "truncated": stats.truncated,
+            "gateway_mac": ctx.gateway_mac,
+        },
     )
+
+
+def file_sha256(path: str) -> str:
+    """Fingerprint of the exact file analysed (for chain of custody). Read in chunks."""
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def _notes(ctx: Context, stats: ReadStats, cfg: dict[str, Any],

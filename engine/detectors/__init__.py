@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from .arp import ArpDetector
 from .base import Detector
+from .cleartext import CleartextDetector
 from .delays import DelayDetector
 from .dns_hijack import DnsHijackDetector
 from .mtu import MtuDetector
@@ -16,4 +17,4 @@ from .tcp_retrans import TcpRetransDetector
 def all_detectors() -> list[Detector]:
     """Fresh instances of every detector."""
     return [ArpDetector(), PortScanDetector(), TcpResetDetector(), TcpRetransDetector(), DnsFailureDetector(),
-            RogueDhcpDetector(), DnsHijackDetector(), DelayDetector(), MtuDetector()]
+            RogueDhcpDetector(), DnsHijackDetector(), DelayDetector(), MtuDetector(), CleartextDetector()]

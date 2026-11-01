@@ -323,7 +323,8 @@ def _dns_hijack(f: Finding, ctx: Context) -> Texts:
     example = f"{d['private'][0][0]} → {d['private'][0][1]}" if d["private"] else ", ".join(d["domains"][:2])
     attack = f.verdict == "attack"
     return {
-        "title_simple": (f"Websites are being redirected by a fake DNS server ({d['server']})" if attack
+        "title_simple": (f"Someone is faking your DNS server's answers ({example})" if attack and d.get("forged_macs")
+                         else f"Websites are being redirected by a fake DNS server ({d['server']})" if attack
                          else f"Unexpected DNS answers from {d['server']}"),
         "title_technical": f"DNS hijack/spoofing by {d['server']} ({d['private_count']} private answers, "
                            f"{d['conflicts']} conflicts, {d['unasked']} unsolicited)",
@@ -417,6 +418,32 @@ def _mtu(f: Finding, ctx: Context) -> Texts:
     }
 
 
+SECURE_ALT = {"FTP": "SFTP or FTPS", "POP3": "POP3S (port 995)", "IMAP": "IMAPS (port 993)",
+              "SMTP": "SMTP with STARTTLS / port 465", "HTTP": "HTTPS", "Telnet": "SSH"}
+
+
+def _cleartext(f: Finding, ctx: Context) -> Texts:
+    d = f.details
+    client, server = ctx.device_label(d["client"]), ctx.device_label(d["server"])
+    users = ", ".join(d["users"]) or "a user"
+    alt = SECURE_ALT.get(d["protocol"], "an encrypted protocol")
+    return {
+        "title_simple": f"Passwords are being sent unencrypted ({d['protocol']})",
+        "title_technical": f"Clear-text {d['protocol']} authentication {d['client']} → {d['server']}:{d['port']}",
+        "explanation": (f"{client} logged in to {server} using {d['protocol']}, which sends the username ({users}) and "
+                        "password as readable text. Anyone able to see this network traffic can steal them. "
+                        "(CaughtIn4K hides the password and masks the username.)"),
+        "explanation_technical": f"{d['logins']} credential exchange(s) on TCP/{d['port']}; usernames (masked): {users}.",
+        "likely_cause": f"An old service or device still configured for plain {d['protocol']}.",
+        "fix_steps": [
+            f"Change the password for {users} on {server}: assume it has been seen.",
+            f"Switch the service and the client to {alt}, and turn off plain {d['protocol']} on the server.",
+            "If the device can't do encryption, put it on a separate network segment or behind a VPN.",
+        ],
+        "benign_alternative": "Test accounts on an isolated lab network are low risk, but the habit is still unsafe.",
+    }
+
+
 TEMPLATES: dict[str, Callable[[Finding, Context], Texts]] = {
     "arp_spoofing": _arp,
     "duplicate_ip": _arp,
@@ -433,6 +460,7 @@ TEMPLATES: dict[str, Callable[[Finding, Context], Texts]] = {
     "slow_responses": _slow,
     "slow_dns": _slow,
     "mtu_mismatch": _mtu,
+    "cleartext_credentials": _cleartext,
 }
 
 

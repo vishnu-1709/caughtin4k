@@ -1,6 +1,7 @@
 """DNS hijacking: forged/unexpected answers, conflicting answers, public names pointing into the LAN."""
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
 from ..context import Context, ip_kind
@@ -36,7 +37,8 @@ class DnsHijackDetector(Detector):
             return None
         return self.servers.setdefault(ip, {"answers": 0, "unasked": 0, "conflicts": 0, "private": [],
                                             "self_answers": 0, "clients": set(), "frames": [],
-                                            "first": None, "last": None, "domains": set()})
+                                            "first": None, "last": None, "domains": set(),
+                                            "clean_macs": Counter(), "bad_macs": Counter()})
 
     def feed(self, pkt: PacketView, frame_no: int, ts: float, ctx: Context) -> None:
         d = pkt.dns
@@ -77,6 +79,11 @@ class DnsHijackDetector(Detector):
                         s["private"].append((d["qname"], ip))
                     s["self_answers"] += int(ip == pkt.ip_src)
                     suspicious = True
+        if pkt.eth_src:
+            bucket = s["bad_macs"] if (suspicious or any(ip_kind(ip) == "private" for ip in a_records)
+                                       and looks_public(d["qname"])) else s["clean_macs"]
+            if pkt.eth_src in bucket or len(bucket) < 16:
+                bucket[pkt.eth_src] += 1
         if suspicious:
             if len(s["clients"]) < 200:
                 s["clients"].add(pkt.ip_dst)
@@ -100,9 +107,11 @@ class DnsHijackDetector(Detector):
             if not (s["unasked"] or s["conflicts"] or s["private"]):
                 continue
             # the frames list holds both responses and their queries; make sure query rows exist
+            usual = s["clean_macs"].most_common(1)[0][0] if s["clean_macs"] else None
+            forged = sorted(m for m in s["bad_macs"] if usual and m != usual)
             f = Finding(
                 id=self.new_id(), kind="dns_hijack", category="attack",
-                hosts=[server] + sorted(s["clients"])[:20],
+                hosts=[server] + sorted(s["clients"])[:20] + forged,
                 time_start=s["first"] or ctx.start or 0.0, time_end=s["last"] or ctx.end or 0.0,
                 wireshark_filter=f"dns.flags.response == 1 && ip.src == {server}",
                 details={
@@ -113,6 +122,7 @@ class DnsHijackDetector(Detector):
                     "from_rogue_dhcp": server in rogue_dns, "dhcp_legit_dns": sorted(legit_dns),
                     "is_main_dns": server == main_dns and server in legit_dns | ({main_dns} if not legit_dns else set()),
                     "server_is_local": ip_kind(server) == "private",
+                    "forged_macs": forged, "usual_mac": usual,
                 },
             )
             f.add_evidence(s["frames"])

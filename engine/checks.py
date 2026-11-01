@@ -36,6 +36,8 @@ CHECKS: list[Check] = [
           frozenset({"slow_responses", "slow_dns"}), None),
     Check("MTU mismatches", "fault", "packets too big for part of the path",
           frozenset({"mtu_mismatch", "mtu_offload"}), None),
+    Check("Passwords sent unencrypted", "fault", "logins over FTP, POP3, IMAP, SMTP or plain HTTP",
+          frozenset({"cleartext_credentials"}), "TCP"),
 ]
 
 

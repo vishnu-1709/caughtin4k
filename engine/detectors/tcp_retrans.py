@@ -29,21 +29,28 @@ class TcpRetransDetector(Detector):
             if len(self.flows) >= ctx.cfg["max_flows"]:
                 return
             flow = self.flows[key] = {"data": 0, "retrans": 0, "seen": set(), "order": deque(),
-                                      "first": ts, "last": ts, "frames": [], "first_retrans": None}
+                                      "first": ts, "last": ts, "frames": [], "first_retrans": None, "seen_by": {}}
         flow["data"] += 1
         flow["last"] = ts
         mark = (seq, plen)
+        prev = flow["seen_by"].get(mark)
+        if prev is not None and pkt.eth_src and prev[1] and prev[1] != pkt.eth_src and ts - prev[0] < 0.05:
+            return  # the same segment re-sent by a different device within ms: a relay's copy, not a loss
         if mark in flow["seen"]:
             flow["retrans"] += 1
+            flow["seen_by"][mark] = (ts, pkt.eth_src)  # so the relay's copy of this resend is not counted again
             flow["first_retrans"] = flow["first_retrans"] or ts
             if len(flow["frames"]) < 100:
                 flow["frames"].append(frame_no)
                 ctx.remember(pkt, info=f"Retransmission: {sport} → {dport} Seq={seq} Len={plen}")
             return
         flow["seen"].add(mark)
+        flow["seen_by"][mark] = (ts, pkt.eth_src)
         flow["order"].append(mark)
         if len(flow["order"]) > ctx.cfg["retrans_seq_memory"]:
-            flow["seen"].discard(flow["order"].popleft())
+            old = flow["order"].popleft()
+            flow["seen"].discard(old)
+            flow["seen_by"].pop(old, None)
 
     def finish(self, ctx: Context) -> list[Finding]:
         cfg = ctx.cfg

@@ -127,8 +127,11 @@ class ArpDetector(Detector):
                     "eth_mismatch": sum(s["eth_mismatch"] for s in stats),
                     "gratuitous": sum(s["gratuitous"] for s in stats),
                     "dad_conflicts": sum(len(self.dad_conflicts.get(ip, [])) // 2 for ip in ips),
-                    "both_send_traffic": all(mac in traffic[ip] and originals[ip] in traffic[ip] for ip in ips),
+                    "both_send_traffic": all(mac in traffic[ip] and originals[ip] in traffic[ip] for ip in ips)
+                    and (ctx.relayed(mac, set(own_ips))[1] if own_ips else 0) < 5,  # relayed packets aren't its own
                     "failover_mac": any(m.startswith(FAILOVER_PREFIXES) for m in [mac, *originals.values()]),
+                    "relayed_in": ctx.relayed(mac, set(own_ips))[0] if own_ips else 0,
+                    "relayed_out": ctx.relayed(mac, set(own_ips))[1] if own_ips else 0,
                     "handover": all(self.claims[ip][originals[ip]]["last"] <= first + 1.0 for ip in ips),
                     "targets": targets[:20],
                     "targets_by_ip": {ip: sorted(self.claims[ip][mac]["targets"] - {ip})[:10] for ip in ips},

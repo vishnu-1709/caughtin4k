@@ -1,4 +1,36 @@
 {
+  "attack_chain.pcap": {
+    "description": "Multi-step attack: scan the router, intercept a laptop, fake a bank's address.",
+    "expected": [
+      {
+        "kind": "port_scan",
+        "verdict": "attack"
+      },
+      {
+        "kind": "arp_spoofing",
+        "verdict": "attack"
+      },
+      {
+        "kind": "dns_hijack",
+        "verdict": "attack"
+      }
+    ],
+    "group": "Multi-step attack"
+  },
+  "cleartext_logins.pcap": {
+    "description": "Passwords sent unencrypted (FTP and a plain-HTTP admin page).",
+    "expected": [
+      {
+        "kind": "cleartext_credentials",
+        "verdict": "fault"
+      },
+      {
+        "kind": "cleartext_credentials",
+        "verdict": "fault"
+      }
+    ],
+    "group": "Fault"
+  },
   "mixed_attack_and_fault.pcap": {
     "description": "An attacker intercepts a laptop (and slows it down) while the NAS is down.",
     "expected": [
@@ -14,11 +46,13 @@
         "kind": "service_refused",
         "verdict": "fault"
       }
-    ]
+    ],
+    "group": "Multi-step attack"
   },
   "clean.pcap": {
     "description": "A normal two-minute office capture with no problems.",
-    "expected": []
+    "expected": [],
+    "group": "Healthy or harmless"
   },
   "arp_spoof.pcap": {
     "description": "A device pretends to be the router to intercept a laptop's traffic.",
@@ -27,7 +61,8 @@
         "kind": "arp_spoofing",
         "verdict": "attack"
       }
-    ]
+    ],
+    "group": "Attack"
   },
   "duplicate_ip.pcap": {
     "description": "Two devices were given the same IP address by mistake.",
@@ -36,7 +71,8 @@
         "kind": "duplicate_ip",
         "verdict": "fault"
       }
-    ]
+    ],
+    "group": "Fault"
   },
   "port_scan.pcap": {
     "description": "A device scans another for open ports (Nmap-style SYN scan).",
@@ -45,7 +81,8 @@
         "kind": "port_scan",
         "verdict": "attack"
       }
-    ]
+    ],
+    "group": "Attack"
   },
   "rogue_dhcp_dns_hijack.pcap": {
     "description": "A fake DHCP server makes itself the DNS server and redirects github.com.",
@@ -58,7 +95,8 @@
         "kind": "dns_hijack",
         "verdict": "attack"
       }
-    ]
+    ],
+    "group": "Multi-step attack"
   },
   "dns_failures.pcap": {
     "description": "The router's DNS stops answering for a while, then returns errors.",
@@ -75,7 +113,8 @@
         "kind": "slow_dns",
         "verdict": "fault"
       }
-    ]
+    ],
+    "group": "Fault"
   },
   "tcp_retransmissions.pcap": {
     "description": "A laptop on weak Wi-Fi keeps losing packets.",
@@ -84,7 +123,8 @@
         "kind": "tcp_retransmissions",
         "verdict": "fault"
       }
-    ]
+    ],
+    "group": "Fault"
   },
   "mtu.pcap": {
     "description": "A link with a smaller MTU: big packets are rejected or silently dropped.",
@@ -97,7 +137,8 @@
         "kind": "mtu_mismatch",
         "verdict": "fault"
       }
-    ]
+    ],
+    "group": "Fault"
   },
   "router_replacement.pcap": {
     "description": "Tricky but harmless: the router was replaced, so its MAC address changed.",
@@ -106,11 +147,13 @@
         "kind": "ip_conflict",
         "verdict": "uncertain"
       }
-    ]
+    ],
+    "group": "Healthy or harmless"
   },
   "busy_browsing.pcap": {
     "description": "Tricky but harmless: a laptop loads a page from 22 servers at once.",
-    "expected": []
+    "expected": [],
+    "group": "Healthy or harmless"
   },
   "backup_dhcp.pcap": {
     "description": "Tricky but harmless: a second DHCP server with identical settings.",
@@ -119,7 +162,8 @@
         "kind": "rogue_dhcp",
         "verdict": "fault"
       }
-    ]
+    ],
+    "group": "Healthy or harmless"
   },
   "malicious_xss_dnsname.pcap": {
     "description": "Malicious input: DNS names containing <script> code (must display as text).",
@@ -128,7 +172,8 @@
         "kind": "dns_nxdomain",
         "verdict": "fault"
       }
-    ]
+    ],
+    "group": "Broken or hostile file"
   },
   "slow_handshakes.pcap": {
     "description": "A busy web server takes seconds to accept connections.",
@@ -137,7 +182,8 @@
         "kind": "slow_responses",
         "verdict": "fault"
       }
-    ]
+    ],
+    "group": "Fault"
   },
   "tcp_resets_service_down.pcap": {
     "description": "The file-sharing service on the office NAS has stopped.",
@@ -146,16 +192,25 @@
         "kind": "service_refused",
         "verdict": "fault"
       }
-    ]
+    ],
+    "group": "Fault"
   },
   "broken_truncated.pcap": {
     "description": "Damaged input: a capture cut off in the middle of a packet.",
     "expected": [],
-    "expect_partial": true
+    "expect_partial": true,
+    "group": "Broken or hostile file"
   },
   "not_a_pcap.pcap": {
     "description": "Wrong input: a web page renamed to .pcap (must be rejected).",
     "expected": [],
-    "expect_error": "not_pcap"
+    "expect_error": "not_pcap",
+    "group": "Broken or hostile file"
+  },
+  "malformed_huge_record.pcap": {
+    "description": "Hostile input: a corrupt record claims to hold 4 GB.",
+    "expected": [],
+    "expect_partial": true,
+    "group": "Broken or hostile file"
   }
 }

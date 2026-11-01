@@ -40,6 +40,9 @@ def _ip_conflict(f: Finding, ctx: Context) -> tuple[Indicators, Indicators]:
                        f"{', '.join(d['own_ips'][:3])}: one device is answering for several addresses."))
     if len(d["ips"]) > 1:
         pro.append((1, f"It claims {len(d['ips'])} addresses that belong to other devices."))
+    if d.get("relayed_out", 0) >= 5:
+        pro.append((2, f"It passed on {d['relayed_out']} packets that were not its own (and received "
+                       f"{d.get('relayed_in', 0)} meant for others): it sits in the middle of the conversation."))
     if d["flips"] >= 6:
         pro.append((1, f"The owner of the address switched back and forth {d['flips']} times."))
     if d["eth_mismatch"]:
@@ -206,7 +209,10 @@ def _dns_hijack(f: Finding, ctx: Context) -> tuple[Indicators, Indicators]:
         pro.append((3, f"{d['conflicts']} question(s) received two different answers: one of them is forged."))
     if d["unasked"]:
         pro.append((2, f"{d['unasked']} answer(s) came from a server the device never asked (spoofed replies)."))
-    if d["is_main_dns"] and not d["from_rogue_dhcp"]:
+    if d.get("forged_macs"):
+        pro.append((3, f"The fake answers were sent by a different device ({', '.join(d['forged_macs'][:2])}) than "
+                       f"the one that normally answers for {d['server']}: someone is impersonating the DNS server."))
+    if d["is_main_dns"] and not d["from_rogue_dhcp"] and not d.get("forged_macs"):
         con.append((2, "It is the network's normal DNS server, which may deliberately answer some names "
                        "with internal addresses (split-horizon DNS)."))
     if d["private_count"] and len(d["domains"]) == 1 and not (d["conflicts"] or d["unasked"]):
@@ -242,6 +248,15 @@ def _mtu(f: Finding, ctx: Context) -> tuple[Indicators, Indicators]:
     return pro, con
 
 
+def _cleartext(f: Finding, ctx: Context) -> tuple[Indicators, Indicators]:
+    d = f.details
+    con: Indicators = [(2, f"{d['logins']} login(s) over {d['protocol']} were sent without encryption: a "
+                          "configuration weakness, not an attack in progress."),
+                       (1, "Anyone who can see this traffic (for example a device doing ARP spoofing) could read "
+                           "the password.")]
+    return [], con
+
+
 JUDGES: dict[str, JudgeFn] = {
     "ip_conflict": _ip_conflict,
     "port_scan": _port_scan,
@@ -256,6 +271,7 @@ JUDGES: dict[str, JudgeFn] = {
     "slow_responses": _slow,
     "slow_dns": _slow,
     "mtu_mismatch": _mtu,
+    "cleartext_credentials": _cleartext,
 }
 
 
@@ -272,6 +288,31 @@ def _decide(pro: Indicators, con: Indicators, category: str) -> tuple[str, str]:
     return "uncertain", "low"
 
 
+SEVERITY_BASE = {  # how bad the problem is if real; the verdict and scope adjust it
+    "arp_spoofing": "critical", "dns_hijack": "critical", "rogue_dhcp": "high", "port_scan": "high",
+    "cleartext_credentials": "high", "ip_conflict": "high", "service_refused": "high", "dns_timeout": "high",
+    "dns_servfail": "medium", "duplicate_ip": "medium", "tcp_retransmissions": "medium",
+    "connection_resets": "medium", "slow_responses": "medium", "slow_dns": "low", "mtu_mismatch": "medium",
+    "dns_nxdomain": "low",
+}
+LEVELS = ["low", "medium", "high", "critical"]
+
+
+def severity(f: Finding) -> str:
+    """Base level per kind; lower it for harmless versions of attack checks or tiny scope."""
+    level = LEVELS.index(SEVERITY_BASE.get(f.kind, "medium"))
+    if f.category == "attack" and f.verdict == "fault":
+        level -= 2  # e.g. a correctly configured backup DHCP server
+    if f.verdict == "attack" and f.confidence == "low":
+        level -= 1
+    if f.kind == "dns_nxdomain" and f.verdict != "fault":
+        level = LEVELS.index("high")  # possible malware
+    clients = f.details.get("client_count", 0)
+    if f.verdict == "fault" and clients >= 5:
+        level += 1
+    return LEVELS[max(0, min(level, 3))]
+
+
 def judge_all(findings: list[Finding], ctx: Context) -> None:
     """Set verdict, confidence, kind and both indicator lists on every finding."""
     for f in findings:
@@ -286,3 +327,5 @@ def judge_all(findings: list[Finding], ctx: Context) -> None:
         f.details["score_harmless"] = sum(w for w, _ in con)
         f.verdict, f.confidence = _decide(pro, con, f.category)
         f.kind = RENAME.get(f.kind, {}).get(f.verdict, f.kind)
+    for f in findings:
+        f.severity = severity(f)

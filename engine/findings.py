@@ -18,6 +18,7 @@ class Finding:
     category: str  # what the detector looks for: "attack" | "fault"
     verdict: str = "uncertain"  # set by the judge
     confidence: str = "low"
+    severity: str = "medium"  # critical | high | medium | low: how bad, independent of attack vs fault
     title_simple: str = ""
     title_technical: str = ""
     explanation: str = ""
@@ -55,6 +56,8 @@ class Incident:
     verdict: str
     summary: str
     caused_by: str = ""  # human-readable causal link, if a causal rule fired
+    severity: str = "medium"
+    steps: list[str] = field(default_factory=list)  # the incident's findings in time order (its "story")
     hosts: list[str] = field(default_factory=list)
     time_start: float = 0.0
     time_end: float = 0.0

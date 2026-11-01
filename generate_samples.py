@@ -95,16 +95,18 @@ class Net:
     def tcp_session(self, t: float, client: tuple, server_ip: str, dport: int = 443, rtt: float = 0.03,
                     segments: int = 4, handshake_delay: float | None = None, retrans: set[int] | None = None,
                     retrans_wait: float = 0.3, server_mac: str | None = None, client_l2_dst: str | None = None,
-                    seg_size: int = 1400, sport: int | None = None, close: bool = True) -> float:
+                    seg_size: int = 1400, sport: int | None = None, close: bool = True,
+                    relay: str | None = None) -> float:
         """Full HTTPS-like conversation. Returns the end time.
 
         retrans: indices of server data segments that are lost once and re-sent.
+        relay: MAC of a man-in-the-middle; every packet goes to it first and it forwards a copy on.
         """
         rng = self.rng
         sport = sport or rng.randint(49152, 65000)
         local = server_ip.startswith("192.168.")
         srv_mac = server_mac or (GW[1] if not local else server_mac)
-        c_dst = client_l2_dst or srv_mac
+        c_dst = relay or client_l2_dst or srv_mac
         ttl_s = 64 if local else rng.choice([52, 54, 57, 116])
         cseq, sseq = rng.randint(1, 2**31), rng.randint(1, 2**31)
 
@@ -112,15 +114,25 @@ class Net:
             nonlocal cseq
             p = Ether(src=client[1], dst=c_dst) / IP(src=client[0], dst=server_ip, ttl=64, flags="DF") / \
                 TCP(sport=sport, dport=dport, flags=flags, seq=cseq, ack=sseq, window=64240)
-            self.add(tt, p / Raw(payload) if payload else p)
+            p = p / Raw(payload) if payload else p
+            self.add(tt, p)
+            if relay:  # the man in the middle forwards it to the real router
+                fwd = p.copy()
+                fwd[Ether].src, fwd[Ether].dst = relay, srv_mac
+                self.add(tt + 0.0004, fwd)
             cseq += len(payload) + (1 if ("S" in flags or "F" in flags) else 0)
 
         def s2c(tt: float, flags: str, payload: bytes = b"", seq: int | None = None) -> None:
             nonlocal sseq
             use = sseq if seq is None else seq
-            p = Ether(src=srv_mac, dst=client[1]) / IP(src=server_ip, dst=client[0], ttl=ttl_s, flags="DF") / \
+            p = Ether(src=srv_mac, dst=relay or client[1]) / IP(src=server_ip, dst=client[0], ttl=ttl_s, flags="DF") / \
                 TCP(sport=dport, dport=sport, flags=flags, seq=use, ack=cseq, window=65535)
-            self.add(tt, p / Raw(payload) if payload else p)
+            p = p / Raw(payload) if payload else p
+            self.add(tt, p)
+            if relay:
+                fwd = p.copy()
+                fwd[Ether].src, fwd[Ether].dst = relay, client[1]
+                self.add(tt + 0.0004, fwd)
             if seq is None:
                 sseq += len(payload) + (1 if ("S" in flags or "F" in flags) else 0)
 
@@ -229,7 +241,7 @@ def arp_spoof() -> Net:
     for k in range(6):
         t = 40 + k * 10
         name = list(SITES)[k]
-        net.tcp_session(t, victim, SITES[name], client_l2_dst=ATTACKER[1], rtt=0.09, segments=3)
+        net.tcp_session(t, victim, SITES[name], relay=ATTACKER[1], rtt=0.09, segments=3)
     return net
 
 
@@ -373,7 +385,7 @@ def mixed_attack_and_fault() -> Net:
     for k in range(5):  # traffic via the attacker: slower and lossy
         t = 48 + k * 15
         lost = set(net.rng.sample(range(16), 4))
-        net.tcp_session(t, victim, SITES["github.com"], client_l2_dst=ATTACKER[1], segments=16, retrans=lost,
+        net.tcp_session(t, victim, SITES["github.com"], relay=ATTACKER[1], segments=16, retrans=lost,
                         retrans_wait=0.4, rtt=0.12)
     for i, h in enumerate([MACBOOK, PI, MACBOOK, PI, MACBOOK]):  # unrelated fault: NAS file sharing down
         t = 25 + i * 20
@@ -520,7 +532,86 @@ def backup_dhcp() -> Net:
     return net
 
 
+def attack_chain() -> Net:
+    """Multi-step attack: scan the router, poison ARP (MITM), then forge DNS for a bank site."""
+    net = Net(16)
+    net.background(150, hosts=HOSTS + [ATTACKER])
+    victim = LAPTOP
+    ports = [21, 22, 23, 25, 53, 80, 110, 135, 139, 143, 443, 445, 993, 995, 1723, 3306, 3389, 5900, 8080, 8443]
+    for i, port in enumerate(ports):  # step 1: what is the router running?
+        t = 10 + i * 0.05
+        _syn(net, t, ATTACKER, GW, 40000 + i, port)
+        net.add(t + 0.0005, Ether(src=GW[1], dst=ATTACKER[1]) / IP(src=GW[0], dst=ATTACKER[0], ttl=64) /
+                TCP(sport=port, dport=40000 + i, flags="SA" if port in (53, 80, 443) else "RA", seq=7, ack=1))
+    for k in range(50):  # step 2: become the man in the middle
+        t = 25 + k * 2.0
+        net.arp_reply(t, GW[0], ATTACKER[1], victim)
+        net.arp_reply(t + 0.01, victim[0], ATTACKER[1], GW)
+    for k in range(4):
+        net.tcp_session(32 + k * 20, victim, SITES["wikipedia.org"], relay=ATTACKER[1], segments=3)
+    for k in range(4):  # step 3: forge DNS answers for the bank, racing the real resolver
+        t = 45 + k * 22
+        net.dns_id = (net.dns_id + 7) & 0xFFFF
+        qid, sport = net.dns_id, 53000 + k
+        q = Ether(src=victim[1], dst=ATTACKER[1]) / IP(src=victim[0], dst=GW[0]) / UDP(sport=sport, dport=53) / \
+            DNS(id=qid, rd=1, qd=DNSQR(qname="bank.example.com"))
+        net.add(t, q)
+        forged = Ether(src=ATTACKER[1], dst=victim[1]) / IP(src=GW[0], dst=victim[0], ttl=64) / \
+            UDP(sport=53, dport=sport) / DNS(id=qid, qr=1, rd=1, ra=1, qd=DNSQR(qname="bank.example.com"),
+                                             an=DNSRR(rrname="bank.example.com", ttl=30, rdata=ATTACKER[0]))
+        net.add(t + 0.002, forged)
+        real = Ether(src=GW[1], dst=ATTACKER[1]) / IP(src=GW[0], dst=victim[0], ttl=64) / \
+            UDP(sport=53, dport=sport) / DNS(id=qid, qr=1, rd=1, ra=1, qd=DNSQR(qname="bank.example.com"),
+                                             an=DNSRR(rrname="bank.example.com", ttl=300, rdata="203.0.113.50"))
+        net.add(t + 0.03, real)
+    return net
+
+
+def cleartext_logins() -> Net:
+    """Passwords sent unencrypted: FTP to the NAS and a plain-HTTP router admin login."""
+    net = Net(17)
+    net.background(120)
+
+    def plain(t, client, server, dport, lines):
+        sport = net.rng.randint(49152, 65000)
+        cseq, sseq = net.rng.randint(1, 2**31), net.rng.randint(1, 2**31)
+        net.add(t, Ether(src=client[1], dst=server[1]) / IP(src=client[0], dst=server[0]) /
+                TCP(sport=sport, dport=dport, flags="S", seq=cseq))
+        net.add(t + 0.001, Ether(src=server[1], dst=client[1]) / IP(src=server[0], dst=client[0]) /
+                TCP(sport=dport, dport=sport, flags="SA", seq=sseq, ack=cseq + 1))
+        cseq += 1
+        sseq += 1
+        net.add(t + 0.002, Ether(src=client[1], dst=server[1]) / IP(src=client[0], dst=server[0]) /
+                TCP(sport=sport, dport=dport, flags="A", seq=cseq, ack=sseq))
+        tt = t + 0.01
+        for who, text in lines:
+            data = text.encode()
+            if who == "c":
+                net.add(tt, Ether(src=client[1], dst=server[1]) / IP(src=client[0], dst=server[0]) /
+                        TCP(sport=sport, dport=dport, flags="PA", seq=cseq, ack=sseq) / Raw(data))
+                cseq += len(data)
+            else:
+                net.add(tt, Ether(src=server[1], dst=client[1]) / IP(src=server[0], dst=client[0]) /
+                        TCP(sport=dport, dport=sport, flags="PA", seq=sseq, ack=cseq) / Raw(data))
+                sseq += len(data)
+            tt += 0.05
+
+    plain(30, PRINTER, NAS, 21, [("s", "220 NAS FTP ready\r\n"), ("c", "USER scanner\r\n"),
+                                 ("s", "331 Password required\r\n"), ("c", "PASS Winter2026!\r\n"),
+                                 ("s", "230 Logged in\r\n")])
+    plain(70, LAPTOP, GW, 80, [("c", "POST /login.cgi HTTP/1.1\r\nHost: 192.168.1.1\r\nContent-Type: "
+                                     "application/x-www-form-urlencoded\r\n\r\nusername=admin&password=admin123"),
+                               ("s", "HTTP/1.1 302 Found\r\nLocation: /status.html\r\n\r\n")])
+    return net
+
+
 SCENARIOS: dict[str, tuple[Callable[[], Net], str, list[dict]]] = {
+    "attack_chain.pcap": (attack_chain, "Multi-step attack: scan the router, intercept a laptop, fake a bank's address.",
+                          [{"kind": "port_scan", "verdict": "attack"}, {"kind": "arp_spoofing", "verdict": "attack"},
+                           {"kind": "dns_hijack", "verdict": "attack"}]),
+    "cleartext_logins.pcap": (cleartext_logins, "Passwords sent unencrypted (FTP and a plain-HTTP admin page).",
+                              [{"kind": "cleartext_credentials", "verdict": "fault"},
+                               {"kind": "cleartext_credentials", "verdict": "fault"}]),
     "mixed_attack_and_fault.pcap": (mixed_attack_and_fault,
                                     "An attacker intercepts a laptop (and slows it down) while the NAS is down.",
                                     [{"kind": "arp_spoofing", "verdict": "attack"},
@@ -562,6 +653,17 @@ SCENARIOS: dict[str, tuple[Callable[[], Net], str, list[dict]]] = {
 }
 
 
+GROUPS = {
+    "attack_chain.pcap": "Multi-step attack", "mixed_attack_and_fault.pcap": "Multi-step attack",
+    "rogue_dhcp_dns_hijack.pcap": "Multi-step attack",
+    "arp_spoof.pcap": "Attack", "port_scan.pcap": "Attack",
+    "clean.pcap": "Healthy or harmless", "router_replacement.pcap": "Healthy or harmless",
+    "busy_browsing.pcap": "Healthy or harmless", "backup_dhcp.pcap": "Healthy or harmless",
+    "malicious_xss_dnsname.pcap": "Broken or hostile file", "broken_truncated.pcap": "Broken or hostile file",
+    "not_a_pcap.pcap": "Broken or hostile file", "malformed_huge_record.pcap": "Broken or hostile file",
+}
+
+
 def main() -> None:
     os.makedirs(OUT, exist_ok=True)
     labels = {}
@@ -581,7 +683,17 @@ def main() -> None:
         fh.write(b"<html><body><script>alert('not a capture')</script></body></html>\n" * 20)
     labels["not_a_pcap.pcap"] = {"description": "Wrong input: a web page renamed to .pcap (must be rejected).",
                                  "expected": [], "expect_error": "not_pcap"}
-    print("broken_truncated.pcap, not_a_pcap.pcap  (damaged / wrong-type inputs)")
+    # a corrupt record that claims to hold 4 GB: the reader must stop cleanly, not allocate it
+    import struct
+    huge = clean_bytes[:24] + clean_bytes[24:24 + 16 + struct.unpack("<I", clean_bytes[32:36])[0]]
+    huge += struct.pack("<IIII", 1793520001, 0, 0xFFFFFFF0, 0xFFFFFFF0) + b"\x00" * 64
+    with open(os.path.join(OUT, "malformed_huge_record.pcap"), "wb") as fh:
+        fh.write(huge)
+    labels["malformed_huge_record.pcap"] = {"description": "Hostile input: a corrupt record claims to hold 4 GB.",
+                                            "expected": [], "expect_partial": True}
+    for name in labels:
+        labels[name]["group"] = GROUPS.get(name, "Fault")
+    print("broken_truncated.pcap, not_a_pcap.pcap, malformed_huge_record.pcap  (damaged / hostile inputs)")
     with open(os.path.join(OUT, "labels.json"), "w") as fh:
         json.dump(labels, fh, indent=2)
 

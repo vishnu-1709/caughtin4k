@@ -55,8 +55,11 @@ def group(findings: list[Finding], ctx: Context) -> list[Incident]:
     for i, a in enumerate(findings):
         for b in findings[i + 1:]:
             same_subject = bool(a.hosts and b.hosts and a.hosts[0] == b.hosts[0])  # e.g. two problems of one server
-            if _overlap(a, b) and ((set(a.hosts) & set(b.hosts)) - ignore or same_subject):
+            shared = (set(a.hosts) & set(b.hosts)) - ignore
+            if _overlap(a, b) and (shared or same_subject):
                 union(a.id, b.id)
+            elif a.verdict == "attack" and b.verdict == "attack" and shared:
+                union(a.id, b.id)  # the same device behind several attacks = one campaign, even minutes apart
 
     links = _causal_links(findings)
     caused_by: dict[str, str] = {}
@@ -80,8 +83,15 @@ def group(findings: list[Finding], ctx: Context) -> list[Incident]:
         summary = lead.title_simple if len(members) == 1 else (
             f"{lead.title_simple} (+{len(members) - 1} related issue{'s' if len(members) > 2 else ''})")
         link = next((v for k, v in caused_by.items() if root(k) == rid), "")
+        ordered = sorted(members, key=lambda f: f.time_start)
+        start0 = ctx.start or ordered[0].time_start
+        steps = [f"{max(f.time_start - start0, 0):.0f}s · {f.title_simple}" for f in ordered]
+        n_attacks = sum(1 for f in members if f.verdict == "attack")
+        if n_attacks >= 2:
+            summary = "Multi-step attack: " + " → ".join(f.title_simple for f in ordered if f.verdict == "attack")
+        sev = max((f.severity for f in members), key=lambda x: ["low", "medium", "high", "critical"].index(x))
         incidents.append(Incident(
             id=inc_id, finding_ids=[f.id for f in members], verdict=lead.verdict, summary=summary,
-            caused_by=link, hosts=sorted({h for f in members for h in f.hosts})[:30],
+            caused_by=link, severity=sev, steps=steps if len(members) > 1 else [], hosts=sorted({h for f in members for h in f.hosts})[:30],
             time_start=min(f.time_start for f in members), time_end=max(f.time_end for f in members)))
     return incidents

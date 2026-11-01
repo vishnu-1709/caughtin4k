@@ -89,6 +89,12 @@ class Context:
         self.gateway_mac: str | None = None
         self.has_ethernet = False
         self.extra_notes: list[str] = []  # coverage notes added by detectors
+        # traffic views
+        self.activity: dict[int, Counter[str]] = {}  # whole second -> packets per transport
+        self.conversations: dict[tuple[str, str, str], list] = {}  # (a, b, proto) -> [pkts, bytes, first frame, first, last]
+        # per-MAC IP traffic: what each device received for / sent from which IPs (relay = man in the middle)
+        self.mac_rx: dict[str, Counter[str]] = {}
+        self.mac_tx: dict[str, Counter[str]] = {}
 
     # ---------------------------------------------------------------- feeding
     def feed(self, v: PacketView) -> None:
@@ -102,11 +108,24 @@ class Context:
             self.has_ethernet = True
             if is_unicast_mac(v.eth_src):
                 self._bump(self.mac_pkts, v.eth_src)
+        transport = "ARP" if v.arp else "TCP" if v.tcp else "UDP" if v.udp else "ICMP" if v.icmp else "Other"
+        sec = int(v.ts)
+        bucket = self.activity.get(sec)
+        if bucket is None and len(self.activity) < 50_000:
+            bucket = self.activity[sec] = Counter()
+        if bucket is not None:
+            bucket[transport] += 1
         if v.arp:
             self._feed_arp(v)
+            self._conversation(v.arp[2], v.arp[4], "ARP", v)
             return
         if not v.ip_src:
             return
+        self._conversation(v.ip_src, v.ip_dst, transport, v)
+        if v.eth_src and is_unicast_mac(v.eth_src):
+            self._add_ip_mac(self.mac_tx, v.eth_src, v.ip_src)
+        if v.eth_dst and is_unicast_mac(v.eth_dst):
+            self._add_ip_mac(self.mac_rx, v.eth_dst, v.ip_dst)
         self.talkers[v.ip_src] += v.length
         if len(self.talkers) > self.cfg["max_hosts"] * 2:
             self.talkers = Counter(dict(self.talkers.most_common(self.cfg["max_hosts"])))
@@ -130,6 +149,40 @@ class Context:
             self._feed_dhcp(v)
         if v.tcp:
             self._feed_tcp(v)
+
+    def _conversation(self, a: str, b: str, proto: str, v: PacketView) -> None:
+        key = (a, b, proto) if a <= b else (b, a, proto)
+        c = self.conversations.get(key)
+        if c is None:
+            if len(self.conversations) >= 20_000:
+                return
+            c = self.conversations[key] = [0, 0, v.frame, v.ts, v.ts]
+        c[0] += 1
+        c[1] += v.length
+        c[4] = v.ts
+
+    def relayed(self, mac: str, own_ips: set[str]) -> tuple[int, int]:
+        """Packets a device received for other addresses, and sent from other addresses (forwarding)."""
+        rx = sum(n for ip, n in self.mac_rx.get(mac, {}).items() if ip not in own_ips)
+        tx = sum(n for ip, n in self.mac_tx.get(mac, {}).items() if ip not in own_ips)
+        return rx, tx
+
+    def activity_series(self, bins: int = 120) -> list[dict[str, Any]]:
+        """Packets per time bin per transport, relative to capture start."""
+        if not self.activity or self.start is None:
+            return []
+        width = max(1, int(self.duration // bins) + 1)
+        out: dict[int, Counter[str]] = {}
+        for sec, counts in self.activity.items():
+            b = int((sec - int(self.start)) // width) * width
+            out.setdefault(b, Counter()).update(counts)
+        return [{"t": t, "width": width, **dict(c)} for t, c in sorted(out.items())]
+
+    def top_conversations(self, n: int = 50) -> list[dict[str, Any]]:
+        rows = sorted(self.conversations.items(), key=lambda kv: -kv[1][1])[:n]
+        return [{"a": a, "b": b, "proto": p, "packets": c[0], "bytes": c[1], "first_frame": c[2],
+                 "first": round(c[3] - (self.start or c[3]), 3), "duration": round(c[4] - c[3], 3)}
+                for (a, b, p), c in rows]
 
     def _bump(self, counter: Counter[str], key: str) -> None:
         if key in counter or len(counter) < self.cfg["max_hosts"]:

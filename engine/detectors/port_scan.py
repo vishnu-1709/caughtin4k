@@ -65,7 +65,12 @@ class PortScanDetector(Detector):
             horizontal = stats["max_hosts_one_port"] >= cfg["scan_min_hosts"]
             if not (vertical or horizontal):
                 continue
-            targets = {(d, p) for _, d, p, _ in probes}
+            # measure only the burst itself: probes to the main target (vertical) or on the main port (sweep)
+            if vertical:
+                focus = [pr for pr in probes if pr[1] == stats["main_target"]]
+            else:
+                focus = [pr for pr in probes if pr[2] == stats["main_port"]]
+            targets = sorted({(d, p) for _, d, p, _ in focus})
             outcomes = [self.outcome.get((src, d, p), "none") for d, p in targets]
             completed = outcomes.count("completed")
             completion = completed / max(len(targets), 1)
@@ -73,10 +78,8 @@ class PortScanDetector(Detector):
                 continue  # many real conversations: a busy client, not a scan
             hosts = sorted({d for d, _ in targets})
             ports = sorted({p for _, p in targets})
-            focus = stats["main_target"] if vertical else None
-            open_ports = sorted({p for (d, p), o in zip(targets, outcomes)
-                                 if o in ("open", "completed") and (focus is None or d == focus)})
-            first, last = probes[0][0], probes[-1][0]
+            open_ports = sorted({p for (d, p), o in zip(targets, outcomes) if o in ("open", "completed")})
+            first, last = focus[0][0], focus[-1][0]
             duration = max(last - first, 0.001)
             seq_ports = sum(1 for a, b in zip(ports, ports[1:]) if b == a + 1)
             f = Finding(
@@ -85,17 +88,18 @@ class PortScanDetector(Detector):
                 wireshark_filter=f"ip.src == {src} && tcp.flags.syn == 1 && tcp.flags.ack == 0",
                 details={
                     "scanner": src, "targets": hosts[:50], "target_count": len(hosts),
-                    "ports_tried": len(ports), "attempts": len(probes), "open_ports": open_ports[:30],
+                    "ports_tried": len(ports), "attempts": len(focus), "open_ports": open_ports[:30],
                     "closed": outcomes.count("closed"), "no_reply": outcomes.count("none"),
                     "completed": completed, "completion": round(completion, 3),
                     "failure_ratio": round((outcomes.count("closed") + outcomes.count("none")) / max(len(targets), 1), 3),
-                    "rate": round(len(probes) / duration, 1), "duration": round(duration, 1),
+                    "rate": round(len(focus) / duration, 1), "duration": round(duration, 1),
                     "sequential_ratio": round(seq_ports / max(len(ports) - 1, 1), 2),
                     "half_open": self.half_open_by.get(src, 0),
                     "vertical": vertical, "horizontal": horizontal, **stats,
                     "sample_ports": ports[:25],
                 },
             )
+            probes = focus
             frames = [fr for *_, fr in probes]
             closed_frames = [n for n, row in ctx.rows.items() if row[1] in hosts and row[2] == src and "RST" in row[4]]
             f.add_evidence(frames[:150] + closed_frames[:50])
@@ -106,7 +110,7 @@ class PortScanDetector(Detector):
     def _window(probes: list[tuple[float, str, int, int]], window: float) -> dict[str, Any]:
         """Max distinct ports on one host, and hosts on one port, inside any time window."""
         best_ports = best_hosts = 0
-        best_target = None
+        best_target = best_port = None
         lo = 0
         per_host: dict[str, dict[int, int]] = {}
         per_port: dict[int, dict[str, int]] = {}
@@ -126,5 +130,7 @@ class PortScanDetector(Detector):
                 lo += 1
             if len(per_host[dst]) > best_ports:
                 best_ports, best_target = len(per_host[dst]), dst
-            best_hosts = max(best_hosts, len(per_port[port]))
-        return {"max_ports_one_host": best_ports, "max_hosts_one_port": best_hosts, "main_target": best_target}
+            if len(per_port[port]) > best_hosts:
+                best_hosts, best_port = len(per_port[port]), port
+        return {"max_ports_one_host": best_ports, "max_hosts_one_port": best_hosts, "main_target": best_target,
+                "main_port": best_port}
