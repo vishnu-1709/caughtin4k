@@ -73,6 +73,16 @@ st.markdown("""<style>
 .ci-kv td {padding:3px 12px 3px 0; vertical-align:top;}
 .ci-kv td:first-child {color:#94A3B8; white-space:nowrap;}
 .ci-ok {color:#12B76A; margin-right:6px;}
+.ci-tiles {display:grid; grid-template-columns:repeat(6,1fr); gap:8px; margin:8px 0 6px 0;}
+.ci-tile {background:#111A2E; border:1px solid #1F2A44; border-top:3px solid #1F2A44; border-radius:6px; padding:7px 10px;}
+.ci-tile b {display:block; font-size:1.35rem; line-height:1.2;} .ci-tile span {color:#94A3B8; font-size:0.78rem;}
+.ci-first {border:1px solid #2DD4BF; border-radius:6px; padding:8px 14px; margin:4px 0 8px 0; background:#0F1B2D;}
+.ci-first b.h {color:#2DD4BF; font-size:0.9rem;} .ci-first ol {margin:4px 0 0 0; padding-left:1.2rem;}
+.ci-first li {margin:2px 0;} .ci-first .ci-muted {font-size:0.9rem;}
+.ci-h {font-size:0.78rem; text-transform:uppercase; letter-spacing:0.05em; color:#94A3B8; margin:10px 0 3px 0; font-weight:600;}
+.ci-h.bad {color:#F97066;} .ci-h.good {color:#32D583;}
+.ci-why {border-left:1px dashed #1F2A44; padding-left:16px;}
+@media (max-width: 760px) {.ci-tiles {grid-template-columns:repeat(3,1fr);} .ci-why {border:0; padding:0;}}
 @media (max-width: 640px) {.ci-checks {grid-template-columns:1fr;}}
 </style>""", unsafe_allow_html=True)
 
@@ -190,42 +200,21 @@ def banner(r: Result) -> None:
         if c["uncertain"]:
             extra.append(f"{c['uncertain']} uncertain")
         head += (", " + ", ".join(extra) if extra else "") + " found"
-        start = f"Start with: {first.title_simple}." if first else ""
+        start = "The steps below are in order of urgency."
     elif c["fault"] or c["uncertain"]:
         color = COLORS["fault"] if c["fault"] else COLORS["uncertain"]
         parts = [f"{c['fault']} fault{'s' if c['fault'] != 1 else ''}"] if c["fault"] else []
         if c["uncertain"]:
             parts.append(f"{c['uncertain']} unclear issue{'s' if c['uncertain'] > 1 else ''}")
         head = "Needs attention: " + ", ".join(parts) + " found, no attacks"
-        start = f"Start with: {first.title_simple}." if first else ""
+        start = "The steps below are in order of urgency."
     else:
         color, head = COLORS["healthy"], "Network looks healthy"
-        start = f"No faults or attacks found in {r.packets_read:,} packets. Check the coverage note for what this capture can show."
-    if r.incidents and len(r.incidents) < len(r.findings):
-        start += (f" These {len(r.findings)} issues are one connected incident (see the Incidents tab)."
-                  if len(r.incidents) == 1 else
-                  f" These {len(r.findings)} issues come from {len(r.incidents)} separate incidents "
-                  "(see the Incidents tab).")
+        start = f"No faults or attacks found in {r.packets_read:,} packets."
+    if r.incidents and len(r.incidents) == 1 and len(r.findings) > 1:
+        start += " All of them are one connected incident (see the Incidents tab)."
     html_block(f'<div class="ci-banner" style="border-left:6px solid {color}; background:#111A2E;">'
                f'<h3 style="color:{color}">{esc(head)}</h3><p>{esc(start)}</p></div>')
-
-
-def metrics(r: Result) -> None:
-    cols = st.columns(4)
-    cols[0].metric("Packets read", f"{r.packets_read:,}")
-    cols[1].metric("Skipped packets", f"{r.packets_skipped:,}")
-    cols[2].metric("Devices", f"{len({d['mac'] if d['mac'] != '-' else d['ip'] for d in r.devices}):,}")
-    cols[3].metric("Duration", f"{r.duration:.0f} s")
-
-
-def coverage(r: Result) -> None:
-    for w in r.warnings:
-        st.warning(w, icon="⚠️")
-    with st.expander("What this capture can and can't show", expanded=not r.findings):
-        items = r.coverage + [f"Skipped: {s}" for s in r.skipped_checks]
-        html_block("<ul>" + "".join(f"<li>{esc(i)}</li>" for i in items) + "</ul>")
-        html_block(f'<div class="ci-meta">Analysed in {r.elapsed:.1f} s · link type: '
-                   f'{esc(", ".join(r.link_types) or "unknown")} · format: {esc(r.file_format)}</div>')
 
 
 def evidence_table(f: Finding, r: Result) -> None:
@@ -244,42 +233,6 @@ def evidence_table(f: Finding, r: Result) -> None:
         st.caption(f"Showing {len(rows)} of {total} packets. Use the Wireshark filter below to see all.")
     st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch", height=min(38 + 35 * len(rows), 320),
                  column_config={"Time": st.column_config.NumberColumn("Time (s)", format="%.3f")})
-
-
-def card(f: Finding, r: Result, technical: bool) -> None:
-    color = COLORS.get(f.verdict, COLORS["uncertain"])
-    title = f.title_technical if technical else f.title_simple
-    explanation = (f.explanation_technical or f.explanation) if technical else f.explanation
-    steps = "".join(f"<li>{esc(s)}</li>" for s in f.fix_steps)
-    with st.container(border=True):
-        html_block(
-            f'<div class="ci-card">'
-            f'<span class="ci-badge" style="background:{color}">{LABELS.get(f.verdict, "?")}</span>'
-            f'{sev_badge(f.severity)}'
-            f'<span class="ci-meta">{esc(f.confidence)} confidence · {rel(f.time_start, r)} – {rel(f.time_end, r)}'
-            f' · {len(f.evidence_frames)} packets of evidence</span>'
-            f'<div class="ci-title">{esc(title)}</div>'
-            f'<div>{esc(explanation)}</div>'
-            f'<div style="margin-top:10px"><b>What to do</b><ol>{steps}</ol></div>'
-            + (f'<div class="ci-link" style="margin-top:6px">🔗 {esc(f.linked_text)}</div>' if f.linked_text else "")
-            + '</div>')
-        with st.expander("Why we think so"):
-            html_block(f'<div class="ci-card"><div class="ci-muted">Likely cause</div><div>{esc(f.likely_cause)}</div>'
-                       '<div class="ci-muted" style="margin-top:8px">Signs of an attack</div>'
-                       + ("<ul>" + "".join(f"<li>{esc(t)}</li>" for t in f.indicators_for) + "</ul>"
-                          if f.indicators_for else "<div>None found.</div>")
-                       + '<div class="ci-muted" style="margin-top:8px">Signs of a harmless fault</div>'
-                       + ("<ul>" + "".join(f"<li>{esc(t)}</li>" for t in f.indicators_against) + "</ul>"
-                          if f.indicators_against else "<div>None found.</div>")
-                       + (f'<div class="ci-meta">Score: attack {f.details.get("score_attack", 0)} vs harmless '
-                          f'{f.details.get("score_harmless", 0)}</div>' if "score_attack" in f.details else "")
-                       + '</div>')
-        with st.expander("Could it be harmless?"):
-            html_block(f'<div class="ci-card">{esc(f.benign_alternative)}</div>')
-        with st.expander("Evidence"):
-            evidence_table(f, r)
-        st.caption("Check it yourself in Wireshark (display filter):")
-        st.code(f.wireshark_filter or "-", language=None)
 
 
 def timeline(r: Result, findings: list[Finding], technical: bool) -> None:
@@ -368,20 +321,6 @@ def checks_overview() -> None:
                '<b>uncertain</b>, with the evidence for both sides, the likely cause and what to do.</div>')
 
 
-def checks_strip(r: Result) -> None:
-    """After analysis: one pill per check with its status."""
-    pills = []
-    for row in check_status(r):
-        if row["status"] == "found":
-            color, text = COLORS.get(row["verdict"], COLORS["uncertain"]), f"{row['count']} found"
-        else:
-            color, text = STATUS_STYLE[row["status"]]
-        pills.append(f'<span class="ci-pill" title="{esc(row["blurb"])}"><span class="ci-dot" '
-                     f'style="background:{color}"></span>{esc(row["name"])} '
-                     f'<span class="ci-muted">· {esc(text)}</span></span>')
-    html_block('<div class="ci-muted" style="margin:4px 0 2px 0">What we checked</div><div>' + "".join(pills) + "</div>")
-
-
 def capture_guide(expanded: bool) -> None:
     with st.expander("How to record a capture (Wireshark, 3 steps)", expanded=expanded):
         st.markdown(
@@ -396,18 +335,6 @@ def capture_guide(expanded: bool) -> None:
 def sev_badge(level: str) -> str:
     c = SEV_COLORS.get(level, SEV_COLORS["low"])
     return f'<span class="ci-sev" style="color:{c}; border-color:{c}">{esc(level)}</span>'
-
-
-def downloads(view: Result, hide: bool) -> None:
-    d1, d2, d3, d4 = st.columns([1, 1, 1, 1.4])
-    d1.download_button("⬇ HTML report", to_html(view), file_name=safe_filename(view.file_name, ".html"),
-                       mime="text/html", width="stretch", help="Printable report: summary, issues, evidence, traffic")
-    d2.download_button("⬇ JSON", to_json(view), file_name=safe_filename(view.file_name, ".json"),
-                       mime="application/json", width="stretch", help="Everything, machine-readable")
-    d3.download_button("⬇ Evidence CSV", to_csv(view), file_name=safe_filename(view.file_name, "-evidence.csv"),
-                       mime="text/csv", width="stretch", help="Every packet cited as evidence")
-    d4.caption("Reports hold the analysis and packet summaries, never the capture."
-               + (" Addresses are masked (Hide IPs is on)." if hide else ""))
 
 
 def incidents_tab(r: Result) -> None:
@@ -543,6 +470,104 @@ def sample_picker(labels: dict) -> str:
                         format_func=lambda n: "Choose a sample…" if not n else f"{n} — {labels[n]['description']}")
 
 
+MD_SPECIAL = re.compile(r"([\\`*_{}\[\]()#+\-.!|:<>$~])")
+VERDICT_MD = {"attack": ("🔴", "red"), "fault": ("🟠", "orange"), "uncertain": ("⚪", "gray")}
+SEV_MD = {"critical": "red", "high": "orange", "medium": "orange", "low": "gray"}
+
+
+def md_escape(text: Any) -> str:
+    """Escape Markdown so packet text in widget labels is shown literally."""
+    return MD_SPECIAL.sub(r"\\\1", str(text))
+
+
+def overview(r: Result) -> None:
+    """Count tiles and the three most important actions, right under the verdict."""
+    c = r.counts()
+
+    def tile(label: str, value: Any, tone: str = "") -> str:
+        return f'<div class="ci-tile" style="border-top-color:{tone or "#1F2A44"}"><b>{esc(value)}</b><span>{esc(label)}</span></div>'
+
+    html_block('<div class="ci-tiles">'
+               + tile("attacks", c["attack"], COLORS["attack"] if c["attack"] else "")
+               + tile("faults", c["fault"], COLORS["fault"] if c["fault"] else "")
+               + tile("uncertain", c["uncertain"], COLORS["uncertain"] if c["uncertain"] else "")
+               + tile("incidents", len(r.incidents))
+               + tile("packets", f"{r.packets_read:,}")
+               + tile("seconds of traffic", f"{r.duration:.0f}") + "</div>")
+    top = [f for f in r.findings if f.fix_steps][:3]
+    if top:
+        html_block('<div class="ci-first"><b class="h">Do this first</b><ol>'
+                   + "".join(f'<li><b>{esc(f.title_simple)}</b><br><span class="ci-muted">{esc(f.fix_steps[0])}</span></li>'
+                             for f in top) + "</ol></div>")
+
+
+def checks_and_coverage(r: Result) -> None:
+    """One folded line: what was checked, plus what this capture can't show."""
+    rows = check_status(r)
+    found = sum(1 for x in rows if x["status"] == "found")
+    clear = sum(1 for x in rows if x["status"] == "clear")
+    nodata = sum(1 for x in rows if x["status"] == "no_data")
+    label = (f"What we checked: {found} found · {clear} clear"
+             + (f" · {nodata} no data" if nodata else "") + " — and what this capture can't show")
+    with st.expander(label, expanded=False, icon="🧾"):
+        pills = []
+        for row in rows:
+            if row["status"] == "found":
+                color, text = COLORS.get(row["verdict"], COLORS["uncertain"]), f"{row['count']} found"
+            else:
+                color, text = STATUS_STYLE[row["status"]]
+            pills.append(f'<span class="ci-pill" title="{esc(row["blurb"])}"><span class="ci-dot" '
+                         f'style="background:{color}"></span>{esc(row["name"])} '
+                         f'<span class="ci-muted">· {esc(text)}</span></span>')
+        html_block("<div>" + "".join(pills) + "</div>")
+        items = r.coverage + [f"Skipped: {x}" for x in r.skipped_checks]
+        html_block('<div class="ci-h">What this capture can and can\'t show</div><ul>'
+                   + "".join(f"<li>{esc(i)}</li>" for i in items) + "</ul>")
+
+
+def download_menu(view: Result, hide: bool) -> None:
+    with st.popover("⬇ Download", width="stretch", help="HTML report, JSON or evidence CSV"):
+        st.download_button("HTML report (printable)", to_html(view), file_name=safe_filename(view.file_name, ".html"),
+                           mime="text/html", width="stretch")
+        st.download_button("JSON (everything)", to_json(view), file_name=safe_filename(view.file_name, ".json"),
+                           mime="application/json", width="stretch")
+        st.download_button("Evidence CSV", to_csv(view), file_name=safe_filename(view.file_name, "-evidence.csv"),
+                           mime="text/csv", width="stretch")
+        st.caption("Reports hold the analysis and packet summaries, never the capture."
+                   + (" Addresses are masked (Hide IPs is on)." if hide else ""))
+
+
+def issue(f: Finding, r: Result, technical: bool, opened: bool) -> None:
+    """One line per issue (verdict, severity, title, time); opens into two columns."""
+    icon, vcolor = VERDICT_MD.get(f.verdict, ("⚪", "gray"))
+    title = f.title_technical if technical else f.title_simple
+    label = (f"{icon} :{vcolor}[**{f.verdict.upper()}**] · :{SEV_MD.get(f.severity, 'gray')}[{f.severity.upper()}]"
+             f" — {md_escape(title)} · {rel(f.time_start, r)}")
+    with st.expander(label, expanded=opened, key=f"iss_{f.id}"):
+        explanation = (f.explanation_technical or f.explanation) if technical else f.explanation
+        left, right = st.columns([1.15, 1], gap="medium")
+        with left:
+            html_block('<div class="ci-card">'
+                       f'<div class="ci-meta">{esc(f.confidence)} confidence · {rel(f.time_start, r)} – '
+                       f'{rel(f.time_end, r)} · {len(f.evidence_frames)} packets of evidence</div>'
+                       f'<div class="ci-h">What happened</div><div>{esc(explanation)}</div>'
+                       + (f'<div class="ci-link" style="margin-top:6px">🔗 {esc(f.linked_text)}</div>' if f.linked_text else "")
+                       + f'<div class="ci-h">What to do</div><ol>{"".join(f"<li>{esc(x)}</li>" for x in f.fix_steps)}</ol>'
+                       f'<div class="ci-h">Likely cause</div><div>{esc(f.likely_cause)}</div></div>')
+        with right:
+            def items(xs: list[str]) -> str:
+                return "<ul>" + "".join(f"<li>{esc(t)}</li>" for t in xs) + "</ul>" if xs else "<div class='ci-muted'>None found.</div>"
+            html_block('<div class="ci-card ci-why">'
+                       f'<div class="ci-h bad">Signs of an attack</div>{items(f.indicators_for)}'
+                       f'<div class="ci-h good">Signs of a harmless fault</div>{items(f.indicators_against)}'
+                       + (f'<div class="ci-meta">Score: attack {f.details.get("score_attack", 0)} vs harmless '
+                          f'{f.details.get("score_harmless", 0)}</div>' if "score_attack" in f.details else "")
+                       + f'<div class="ci-h">Could it be harmless?</div><div>{esc(f.benign_alternative)}</div></div>')
+        st.code(f.wireshark_filter or "-", language=None)
+        if st.toggle(f"Show the {len(f.evidence_frames)} evidence packets", key=f"ev_{f.id}"):
+            evidence_table(f, r)
+
+
 # --------------------------------------------------------------------------- page
 html_block('<div class="ci-brand"><h1>🔎 CaughtIn4K</h1>'
            f'<span class="ci-meta">Offline packet-capture diagnosis · {len(CHECKS)} checks · v{esc(__version__)}</span></div>')
@@ -575,7 +600,6 @@ if key is None:
     checks_overview()
     st.stop()
 
-capture_guide(expanded=False)
 if st.session_state.get("key") != key:
     st.session_state.pop("result", None)
     st.session_state["key"] = key
@@ -614,17 +638,12 @@ if hide:
     view = st.session_state["redacted"]
 
 banner(view)
-m = st.columns(5)
-m[0].metric("Packets analysed", f"{view.packets_read:,}")
-m[1].metric("Duration", f"{view.duration:.0f} s")
-m[2].metric("Devices", f"{len({d['mac'] if d['mac'] != '-' else d['ip'] for d in view.devices}):,}")
-m[3].metric("Issues · incidents", f"{len(view.findings)} · {len(view.incidents)}")
-m[4].metric("Analysis time", f"{view.elapsed:.1f} s")
-downloads(view, hide)
-checks_strip(view)
-coverage(view)
+overview(view)
+for w in view.warnings:
+    st.warning(w, icon="⚠️")
+checks_and_coverage(view)
 
-c1, c2, c3 = st.columns([2.2, 1, 1.2])
+c1, c2, c3, c4 = st.columns([2.3, 0.9, 1.25, 0.9], vertical_alignment="bottom")
 counts = result.counts()
 options = {"all": f"All ({len(result.findings)})", "attack": f"Attacks ({counts['attack']})",
            "fault": f"Faults ({counts['fault']})", "uncertain": f"Uncertain ({counts['uncertain']})"}
@@ -634,18 +653,22 @@ with c2:
     st.toggle("Hide IPs", key="hide_ips", help="Masks IP and MAC addresses everywhere, including downloads.")
 with c3:
     st.segmented_control("Wording", ["Simple", "Technical"], default="Simple", key="wording")
+with c4:
+    download_menu(view, hide)
 
 shown = [f for f in view.findings if flt == "all" or f.verdict == flt]
 evidence_count = len({n for f in view.findings for n in f.evidence_frames})
-tabs = st.tabs([f"Issues ({len(shown)})", f"Incidents ({len(view.incidents)})", "Traffic", "Devices",
-                f"Evidence ({evidence_count})", "Security & privacy"])
+tabs = st.tabs([f"Issues ({len(shown)})", f"Incidents ({len(view.incidents)})", "Traffic",
+                f"Devices ({len(view.devices)})", f"Evidence ({evidence_count})", "Security & privacy"])
 with tabs[0]:
     if not view.findings:
-        st.success("No faults or attacks found. See “What we checked” above for everything that was examined.")
+        st.success("No faults or attacks found. Open “What we checked” above to see everything that was examined.")
     elif not shown:
         st.caption("Nothing in this category.")
-    for f in shown:
-        card(f, view, technical)
+    else:
+        st.caption("Most serious first. Click a line to see what happened, what to do and why we think so.")
+    for i, f in enumerate(shown):
+        issue(f, view, technical, opened=False)
     if shown:
         st.markdown("**Timeline**")
         timeline(view, shown, technical)
