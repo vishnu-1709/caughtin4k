@@ -86,6 +86,15 @@
       }
     ]
   },
+  "malicious_xss_dnsname.pcap": {
+    "description": "Malicious input: DNS names containing <script> code (must display as text).",
+    "expected": [
+      {
+        "kind": "dns_nxdomain",
+        "verdict": "fault"
+      }
+    ]
+  },
   "slow_handshakes.pcap": {
     "description": "A busy web server takes seconds to accept connections.",
     "expected": [
@@ -103,5 +112,15 @@
         "verdict": "fault"
       }
     ]
+  },
+  "broken_truncated.pcap": {
+    "description": "Damaged input: a capture cut off in the middle of a packet.",
+    "expected": [],
+    "expect_partial": true
+  },
+  "not_a_pcap.pcap": {
+    "description": "Wrong input: a web page renamed to .pcap (must be rejected).",
+    "expected": [],
+    "expect_error": "not_pcap"
   }
 }

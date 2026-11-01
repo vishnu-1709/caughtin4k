@@ -24,6 +24,7 @@ from engine.config import DEFAULTS
 from engine.findings import Finding
 from engine.loader import CaptureError, clean_text, quick_preview
 from engine.redact import redact_result
+from engine.report import safe_filename, to_csv, to_html, to_json
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SAMPLES = os.path.join(ROOT, "samples")
@@ -411,6 +412,16 @@ st.subheader("Devices")
 devices_table(view)
 st.subheader("Capture stats")
 capture_stats(view)
+st.subheader("Downloads")
+st.caption("Reports contain only the analysis and packet summaries, never the capture itself."
+           + (" Addresses are masked because Hide IPs is on." if hide else ""))
+d1, d2, d3 = st.columns(3)
+d1.download_button("HTML report", to_html(view), file_name=safe_filename(view.file_name, ".html"),
+                   mime="text/html", width="stretch")
+d2.download_button("JSON (all details)", to_json(view), file_name=safe_filename(view.file_name, ".json"),
+                   mime="application/json", width="stretch")
+d3.download_button("Evidence CSV", to_csv(view), file_name=safe_filename(view.file_name, "-evidence.csv"),
+                   mime="text/csv", width="stretch")
 html_block(f'<div class="ci-meta" style="margin-top:2rem">CaughtIn4K · own detection logic, Scapy used only to read '
            f'packets · analysed {esc(view.file_name)} at '
            f'{datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}</div>')

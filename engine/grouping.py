@@ -61,7 +61,8 @@ def group(findings: list[Finding], ctx: Context) -> list[Incident]:
     caused_by: dict[str, str] = {}
     for cause, eff, cause_text, eff_text in links:
         union(cause.id, eff.id)
-        cause.linked_text = cause_text if not cause.linked_text else cause.linked_text + " " + cause_text
+        if cause_text not in cause.linked_text:
+            cause.linked_text = (cause.linked_text + " " + cause_text).strip()
         eff.linked_text = eff_text
         caused_by[root(eff.id)] = f"{cause.title_simple} → {eff.title_simple}"
 

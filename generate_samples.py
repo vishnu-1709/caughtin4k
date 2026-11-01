@@ -396,6 +396,17 @@ def slow_handshakes() -> Net:
     return net
 
 
+def malicious_xss_dnsname() -> Net:
+    """A device keeps looking up a name that contains HTML/JavaScript. The tool must show it as plain text."""
+    net = Net(11)
+    net.background(90)
+    evil = "<script>alert(document.cookie)</script>.example.com"
+    evil2 = '<img src=x onerror="alert(1)">.example.com'
+    for k in range(12):
+        net.dns(10 + k * 6, PI, evil if k % 2 else evil2, rcode=3)
+    return net
+
+
 SCENARIOS: dict[str, tuple[Callable[[], Net], str, list[dict]]] = {
     "mixed_attack_and_fault.pcap": (mixed_attack_and_fault,
                                     "An attacker intercepts a laptop (and slows it down) while the NAS is down.",
@@ -419,6 +430,9 @@ SCENARIOS: dict[str, tuple[Callable[[], Net], str, list[dict]]] = {
                            {"kind": "slow_dns", "verdict": "fault"}]),
     "tcp_retransmissions.pcap": (tcp_retransmissions, "A laptop on weak Wi-Fi keeps losing packets.",
                                  [{"kind": "tcp_retransmissions", "verdict": "fault"}]),
+    "malicious_xss_dnsname.pcap": (malicious_xss_dnsname,
+                                   "Malicious input: DNS names containing <script> code (must display as text).",
+                                   [{"kind": "dns_nxdomain", "verdict": "fault"}]),
     "slow_handshakes.pcap": (slow_handshakes, "A busy web server takes seconds to accept connections.",
                              [{"kind": "slow_responses", "verdict": "fault"}]),
     "tcp_resets_service_down.pcap": (tcp_resets_service_down,
@@ -435,6 +449,18 @@ def main() -> None:
         net.write(name)
         labels[name] = {"description": description, "expected": expected}
         print(f"{name:32} {len(net.pkts):5} packets  {description}")
+    # damaged inputs: a capture cut off mid-packet, and a file that is not a capture at all
+    with open(os.path.join(OUT, "clean.pcap"), "rb") as fh:
+        clean_bytes = fh.read()
+    with open(os.path.join(OUT, "broken_truncated.pcap"), "wb") as fh:
+        fh.write(clean_bytes[: len(clean_bytes) * 2 // 3 + 11])
+    labels["broken_truncated.pcap"] = {"description": "Damaged input: a capture cut off in the middle of a packet.",
+                                       "expected": [], "expect_partial": True}
+    with open(os.path.join(OUT, "not_a_pcap.pcap"), "wb") as fh:
+        fh.write(b"<html><body><script>alert('not a capture')</script></body></html>\n" * 20)
+    labels["not_a_pcap.pcap"] = {"description": "Wrong input: a web page renamed to .pcap (must be rejected).",
+                                 "expected": [], "expect_error": "not_pcap"}
+    print("broken_truncated.pcap, not_a_pcap.pcap  (damaged / wrong-type inputs)")
     with open(os.path.join(OUT, "labels.json"), "w") as fh:
         json.dump(labels, fh, indent=2)
 
