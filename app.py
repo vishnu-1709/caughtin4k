@@ -82,11 +82,6 @@ st.markdown("""<style>
 .ci-h {font-size:0.78rem; text-transform:uppercase; letter-spacing:0.05em; color:#94A3B8; margin:10px 0 3px 0; font-weight:600;}
 .ci-h.bad {color:#F97066;} .ci-h.good {color:#32D583;}
 .ci-why {border-left:1px dashed #1F2A44; padding-left:16px;}
-.ci-status {font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:0.78rem; color:#94A3B8;
-            border:1px solid #1F2A44; background:#070D18; border-radius:5px; padding:5px 10px; margin-bottom:10px;
-            display:flex; flex-wrap:wrap; gap:4px 16px;}
-.ci-status .on {color:#12B76A;} .ci-status b {color:#2DD4BF; font-weight:600;}
-[data-testid="stCode"] pre {background:#070D18 !important; border-left:3px solid #2DD4BF;}
 .ci-prompt {font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:0.78rem; color:#2DD4BF;
             margin:8px 0 -6px 0;}
 @media (max-width: 760px) {.ci-tiles {grid-template-columns:repeat(3,1fr);} .ci-why {border:0; padding:0;}}
@@ -577,9 +572,6 @@ def issue(f: Finding, r: Result, technical: bool, opened: bool) -> None:
 
 
 # --------------------------------------------------------------------------- page
-html_block(f'<div class="ci-status"><span><span class="on">●</span> ONLINE</span><span><b>caughtin4k</b> v{esc(__version__)}</span>'
-           f'<span>offline analysis</span><span>{len(CHECKS)} checks</span><span>sandboxed parser</span>'
-           '<span>no data leaves this server</span></div>')
 html_block('<div class="ci-brand"><h1>CaughtIn4K</h1>'
            '<span class="ci-meta">Packet-capture diagnosis for people without a network expert</span></div>')
 html_block('<div class="ci-tag">Upload a packet capture. Get the faults and attacks in it, explained in plain '
