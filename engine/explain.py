@@ -317,6 +317,70 @@ def _rogue_dhcp(f: Finding, ctx: Context) -> Texts:
     }
 
 
+def _dns_hijack(f: Finding, ctx: Context) -> Texts:
+    d = f.details
+    server = ctx.device_label(d["server"])
+    example = f"{d['private'][0][0]} → {d['private'][0][1]}" if d["private"] else ", ".join(d["domains"][:2])
+    attack = f.verdict == "attack"
+    return {
+        "title_simple": (f"Websites are being redirected by a fake DNS server ({d['server']})" if attack
+                         else f"Unexpected DNS answers from {d['server']}"),
+        "title_technical": f"DNS hijack/spoofing by {d['server']} ({d['private_count']} private answers, "
+                           f"{d['conflicts']} conflicts, {d['unasked']} unsolicited)",
+        "explanation": (f"When devices ask where a website is, {server} gives the wrong address ({example}). "
+                        "Typing the right name then opens the attacker's look-alike page, which can steal passwords."
+                        if attack else
+                        f"{server} returned unusual answers ({example}). This can be an attack or an internal "
+                        "DNS setup."),
+        "explanation_technical": (f"Domains: {', '.join(d['domains'][:5])}; clients: {', '.join(d['clients'][:5])}; "
+                                  f"legit DHCP DNS: {', '.join(d['dhcp_legit_dns']) or 'unknown'}; "
+                                  f"from rogue DHCP: {d['from_rogue_dhcp']}."),
+        "likely_cause": ("A device on the network is posing as the DNS server (often set up through a rogue DHCP "
+                         "server) to redirect traffic." if attack else
+                         "Either DNS tampering or an internal DNS that answers public names locally."),
+        "fix_steps": ([
+            f"Do not enter passwords on affected devices ({', '.join(d['clients'][:3]) or 'see evidence'}) until fixed.",
+            f"Unplug the device at {d['server']} and remove any rogue DHCP server (see the linked issue).",
+            "On each affected device, renew its network settings and check its DNS server is the real one "
+            f"({', '.join(d['dhcp_legit_dns']) or 'your router'}); clear the DNS cache (`ipconfig /flushdns`).",
+            "Change any passwords typed while the redirect was active.",
+        ] if attack else [
+            f"Ask whoever manages DNS whether {', '.join(d['domains'][:2])} is meant to resolve internally.",
+            "If not, treat it as tampering: find the device at that address and check affected devices' DNS settings.",
+        ]),
+        "benign_alternative": ("Companies sometimes point public names at internal servers on purpose "
+                               "(split-horizon DNS), and captive portals redirect until you log in."),
+    }
+
+
+def _slow(f: Finding, ctx: Context) -> Texts:
+    d = f.details
+    dns = d["measure"] == "dns"
+    server = ctx.device_label(d["server"]) if not d["network_wide"] else "many servers"
+    return {
+        "title_simple": ("Website names are slow to look up" if dns else
+                         ("Everything on this network is slow to respond" if d["network_wide"]
+                          else f"{server} is slow to respond")),
+        "title_technical": (f"{'DNS response' if dns else 'TCP handshake'} delay at {d['server']}: "
+                            f"median {d['slow_median_ms']} ms (capture median {d['median_ms']} ms)"),
+        "explanation": (f"{d['slow']} times, {server} took about {d['slow_median_ms'] / 1000:.1f} s to answer "
+                        f"(worst {d['worst_ms'] / 1000:.1f} s), while a normal answer here takes "
+                        f"{d['median_ms']} ms. Users feel this as pages that hang before loading."),
+        "explanation_technical": (f"{d['slow']}/{d['samples']} samples above {d['threshold_ms']} ms "
+                                  f"(max(3× median, floor)); worst {d['worst_ms']} ms."),
+        "likely_cause": ("The server is overloaded or far away, or the path to it is congested." if not dns
+                         else "The DNS server or its upstream link is overloaded."),
+        "fix_steps": [
+            f"Check the load (CPU, memory, connections) on {server}." if not d["network_wide"]
+            else "Check whether the internet link is saturated (speed test, router traffic graph).",
+            "Compare with a capture at a quiet time to see whether the delay is constant or only at peak times.",
+            "If it is an internet server you don't control, contact its owner or your provider; otherwise "
+            "restart or scale the service.",
+        ],
+        "benign_alternative": "Servers on the other side of the world are naturally slower; it matters when it changes.",
+    }
+
+
 TEMPLATES: dict[str, Callable[[Finding, Context], Texts]] = {
     "arp_spoofing": _arp,
     "duplicate_ip": _arp,
@@ -329,6 +393,9 @@ TEMPLATES: dict[str, Callable[[Finding, Context], Texts]] = {
     "dns_servfail": _dns_fail,
     "dns_nxdomain": _nxdomain,
     "rogue_dhcp": _rogue_dhcp,
+    "dns_hijack": _dns_hijack,
+    "slow_responses": _slow,
+    "slow_dns": _slow,
 }
 
 

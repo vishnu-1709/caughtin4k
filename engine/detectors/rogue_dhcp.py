@@ -13,30 +13,32 @@ def _top(counter: Any) -> list[str]:
     return [k for k, _ in counter.most_common(3)]
 
 
+def legit_dhcp_server(ctx: Context) -> str | None:
+    """The server most likely to be the real one: it is the gateway or hands out the real gateway,
+    otherwise the busiest/earliest."""
+    servers = ctx.dhcp_servers
+    if not servers:
+        return None
+
+    def score(sid: str) -> tuple:
+        e = servers[sid]
+        is_gw = int(ctx.gateway_mac is not None and e["mac"] == ctx.gateway_mac)
+        gives_gw = int(ctx.gateway_ip in e["routers"])
+        return (-is_gw, -gives_gw, -(e["acks"] + e["offers"]), e["first_ts"])
+
+    return min(servers, key=score)
+
+
 class RogueDhcpDetector(Detector):
     name = "rogue_dhcp"
 
     def feed(self, pkt: PacketView, frame_no: int, ts: float, ctx: Context) -> None:
         return  # the shared Context already records every DHCP OFFER/ACK
 
-    def legit_server(self, ctx: Context) -> str | None:
-        """The server most likely to be the real one: it hands out the real gateway, or is the busiest/earliest."""
-        servers = ctx.dhcp_servers
-        if not servers:
-            return None
-
-        def score(sid: str) -> tuple:
-            e = servers[sid]
-            is_gw = int(ctx.gateway_mac is not None and e["mac"] == ctx.gateway_mac)
-            gives_gw = int(ctx.gateway_ip in e["routers"])
-            return (-is_gw, -gives_gw, -(e["acks"] + e["offers"]), e["first_ts"])
-
-        return min(servers, key=score)
-
     def finish(self, ctx: Context) -> list[Finding]:
         if len(ctx.dhcp_servers) < 2:
             return []
-        legit_id = self.legit_server(ctx)
+        legit_id = legit_dhcp_server(ctx)
         legit = ctx.dhcp_servers[legit_id]
         findings = []
         for sid, e in ctx.dhcp_servers.items():

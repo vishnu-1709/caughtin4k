@@ -186,6 +186,41 @@ def _rogue_dhcp(f: Finding, ctx: Context) -> tuple[Indicators, Indicators]:
     return pro, con
 
 
+def _dns_hijack(f: Finding, ctx: Context) -> tuple[Indicators, Indicators]:
+    d = f.details
+    pro: Indicators = []
+    con: Indicators = []
+    if d["from_rogue_dhcp"]:
+        pro.append((3, f"This DNS server ({d['server']}) was handed out only by a rogue DHCP server, not by the "
+                       "network's real one."))
+    if d["private_count"]:
+        name, ip = d["private"][0]
+        pro.append((2, f"Public website names were answered with local/private addresses (e.g. {name} → {ip}): "
+                       "visitors are sent to a device on your own network."))
+    if d["self_answers"]:
+        pro.append((2, "The DNS server answered with its own address, sending visitors to itself."))
+    if d["conflicts"]:
+        pro.append((3, f"{d['conflicts']} question(s) received two different answers: one of them is forged."))
+    if d["unasked"]:
+        pro.append((2, f"{d['unasked']} answer(s) came from a server the device never asked (spoofed replies)."))
+    if d["is_main_dns"] and not d["from_rogue_dhcp"]:
+        con.append((2, "It is the network's normal DNS server, which may deliberately answer some names "
+                       "with internal addresses (split-horizon DNS)."))
+    if d["private_count"] and len(d["domains"]) == 1 and not (d["conflicts"] or d["unasked"]):
+        con.append((1, "Only one name is affected."))
+    return pro, con
+
+
+def _slow(f: Finding, ctx: Context) -> tuple[Indicators, Indicators]:
+    d = f.details
+    what = "DNS answers" if d["measure"] == "dns" else "connection set-ups"
+    con: Indicators = [(2, f"{d['slow']} of {d['samples']} {what} took longer than {d['threshold_ms']} ms "
+                          f"(typical in this capture: {d['median_ms']} ms).")]
+    if not d["network_wide"]:
+        con.append((1, "Other servers in the same capture answer quickly, so the delay is at this server or its path."))
+    return [], con
+
+
 JUDGES: dict[str, JudgeFn] = {
     "ip_conflict": _ip_conflict,
     "port_scan": _port_scan,
@@ -196,6 +231,9 @@ JUDGES: dict[str, JudgeFn] = {
     "dns_servfail": _dns_fail,
     "dns_nxdomain": _nxdomain,
     "rogue_dhcp": _rogue_dhcp,
+    "dns_hijack": _dns_hijack,
+    "slow_responses": _slow,
+    "slow_dns": _slow,
 }
 
 

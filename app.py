@@ -152,6 +152,9 @@ def banner(r: Result) -> None:
     else:
         color, head = COLORS["healthy"], "Network looks healthy"
         start = f"No faults or attacks found in {r.packets_read:,} packets. Check the coverage note for what this capture can show."
+    if r.incidents and len(r.incidents) < len(r.findings):
+        start += (f" These {len(r.findings)} issues come from {len(r.incidents)} separate "
+                  f"incident{'s' if len(r.incidents) > 1 else ''} (see the 🔗 links on the cards).")
     html_block(f'<div class="ci-banner" style="border-left:6px solid {color}; background:#111A2E;">'
                f'<h3 style="color:{color}">{esc(head)}</h3><p>{esc(start)}</p></div>')
 

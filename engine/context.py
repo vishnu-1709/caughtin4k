@@ -75,6 +75,7 @@ class Context:
         # services
         self.dns_servers: Counter[str] = Counter()
         self.dns_clients: Counter[str] = Counter()
+        self.names: dict[str, str] = {}  # public IP -> a DNS name that resolved to it (for labels)
         self.dhcp_servers: dict[str, dict[str, Any]] = {}
         # capture quality
         self.flows: dict[tuple, dict[str, Any]] = {}
@@ -119,6 +120,9 @@ class Context:
         if v.dns:
             if v.dns["qr"]:
                 self._bump(self.dns_servers, v.ip_src)
+                for _rr, rtype, rdata, _ttl in v.dns["answers"]:
+                    if rtype == 1 and len(self.names) < 20_000 and rdata not in self.names:
+                        self.names[rdata] = v.dns["qname"]
             else:
                 self._bump(self.dns_clients, v.ip_src)
         if v.dhcp and v.dhcp["type"] in (2, 5):  # OFFER / ACK
@@ -261,6 +265,8 @@ class Context:
         name = vendor(mac) if mac else ""
         role = self.roles(ip)[0] if ip and self.roles(ip) else ""
         bits = [b for b in (role, name if name not in ("Unknown", "") else "") if b]
+        if ip and not bits and ip in self.names and ip_kind(ip) == "public":
+            bits = [self.names[ip]]
         base = ip or mac or "?"
         return f"{base} ({', '.join(bits)})" if bits else base
 

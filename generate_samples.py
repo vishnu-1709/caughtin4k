@@ -383,6 +383,19 @@ def mixed_attack_and_fault() -> Net:
     return net
 
 
+def slow_handshakes() -> Net:
+    """The college web server is overloaded: it takes 1-2.5 s to accept each connection."""
+    net = Net(10)
+    net.background(120)
+    slow_ip = SITES["iiitdm.ac.in"]
+    for k in range(7):
+        t = 15 + k * 13
+        h = HOSTS[k % 3]
+        net.dns(t, h, "iiitdm.ac.in", slow_ip)
+        net.tcp_session(t + 0.05, h, slow_ip, handshake_delay=net.rng.uniform(1.1, 2.5), rtt=0.04, segments=3)
+    return net
+
+
 SCENARIOS: dict[str, tuple[Callable[[], Net], str, list[dict]]] = {
     "mixed_attack_and_fault.pcap": (mixed_attack_and_fault,
                                     "An attacker intercepts a laptop (and slows it down) while the NAS is down.",
@@ -402,9 +415,12 @@ SCENARIOS: dict[str, tuple[Callable[[], Net], str, list[dict]]] = {
                                     {"kind": "dns_hijack", "verdict": "attack"}]),
     "dns_failures.pcap": (dns_failures, "The router's DNS stops answering for a while, then returns errors.",
                           [{"kind": "dns_timeout", "verdict": "fault"},
-                           {"kind": "dns_servfail", "verdict": "fault"}]),
+                           {"kind": "dns_servfail", "verdict": "fault"},
+                           {"kind": "slow_dns", "verdict": "fault"}]),
     "tcp_retransmissions.pcap": (tcp_retransmissions, "A laptop on weak Wi-Fi keeps losing packets.",
                                  [{"kind": "tcp_retransmissions", "verdict": "fault"}]),
+    "slow_handshakes.pcap": (slow_handshakes, "A busy web server takes seconds to accept connections.",
+                             [{"kind": "slow_responses", "verdict": "fault"}]),
     "tcp_resets_service_down.pcap": (tcp_resets_service_down,
                                      "The file-sharing service on the office NAS has stopped.",
                                      [{"kind": "service_refused", "verdict": "fault"}]),

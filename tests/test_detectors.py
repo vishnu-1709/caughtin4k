@@ -44,3 +44,26 @@ def test_rogue_dhcp(run):
 
 def test_clean_capture_has_no_findings(run):
     assert run("clean.pcap").findings == []
+
+
+def test_dns_hijack_caused_by_rogue_dhcp(run):
+    r = run("rogue_dhcp_dns_hijack.pcap")
+    hijack = one(r, "dns_hijack")
+    rogue = one(r, "rogue_dhcp")
+    assert hijack.verdict == "attack" and hijack.details["from_rogue_dhcp"]
+    assert ("github.com", "192.168.1.66") in [tuple(p) for p in hijack.details["private"]]
+    assert hijack.incident_id == rogue.incident_id and "rogue DHCP" in hijack.linked_text
+
+
+def test_slow_handshakes(run):
+    f = one(run("slow_handshakes.pcap"), "slow_responses")
+    assert f.verdict == "fault" and f.details["server"] == "14.139.160.66"
+    assert f.details["slow_median_ms"] > 1000
+
+
+def test_spoofing_linked_to_packet_loss(run):
+    r = run("mixed_attack_and_fault.pcap")
+    spoof, loss, nas = one(r, "arp_spoofing"), one(r, "tcp_retransmissions"), one(r, "service_refused")
+    assert spoof.incident_id == loss.incident_id != nas.incident_id
+    assert "ARP spoofing" in loss.linked_text
+    assert len(r.incidents) == 2

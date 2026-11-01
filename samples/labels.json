@@ -70,6 +70,10 @@
       {
         "kind": "dns_servfail",
         "verdict": "fault"
+      },
+      {
+        "kind": "slow_dns",
+        "verdict": "fault"
       }
     ]
   },
@@ -78,6 +82,15 @@
     "expected": [
       {
         "kind": "tcp_retransmissions",
+        "verdict": "fault"
+      }
+    ]
+  },
+  "slow_handshakes.pcap": {
+    "description": "A busy web server takes seconds to accept connections.",
+    "expected": [
+      {
+        "kind": "slow_responses",
         "verdict": "fault"
       }
     ]
