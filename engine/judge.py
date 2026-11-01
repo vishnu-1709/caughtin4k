@@ -63,8 +63,139 @@ def _ip_conflict(f: Finding, ctx: Context) -> tuple[Indicators, Indicators]:
     return pro, con
 
 
+COMMON_SERVICE_PORTS = {21, 22, 23, 25, 53, 80, 110, 123, 139, 143, 161, 389, 443, 445, 515, 631, 993, 995,
+                        3306, 3389, 5900, 8080, 8443, 9100}
+
+
+def _infra(ip: str, ctx: Context) -> bool:
+    return bool(ctx.roles(ip))
+
+
+def _port_scan(f: Finding, ctx: Context) -> tuple[Indicators, Indicators]:
+    d = f.details
+    pro: Indicators = []
+    con: Indicators = []
+    if d["ports_tried"] >= 100:
+        pro.append((3, f"Tried {d['ports_tried']} different ports in {d['duration']:.0f} s."))
+    elif d["vertical"]:
+        pro.append((2, f"Tried {d['max_ports_one_host']} different ports on {d['main_target']} within a minute."))
+    if d["horizontal"]:
+        pro.append((2, f"Contacted {d['max_hosts_one_port']} different devices on the same port within a minute (a sweep)."))
+    if d["failure_ratio"] >= 0.8:
+        pro.append((2, f"{d['failure_ratio']:.0%} of attempts were refused or got no answer: it is probing, not using services."))
+    if d["rate"] >= 10:
+        pro.append((1, f"{d['rate']:.0f} attempts per second, far faster than any person."))
+    if d["half_open"] >= 3:
+        pro.append((1, f"It hung up {d['half_open']} times right after a port answered (half-open 'SYN scan' pattern)."))
+    if d["sequential_ratio"] >= 0.5 and d["ports_tried"] >= 20:
+        pro.append((1, "Ports were tried in order (1, 2, 3...), like a scanning tool."))
+    if _infra(d["scanner"], ctx):
+        con.append((1, f"The source is network infrastructure ({', '.join(ctx.roles(d['scanner']))})."))
+    if d["completion"] >= 0.15:
+        con.append((1, f"{d['completion']:.0%} of attempts became real conversations."))
+    if d["rate"] < 0.5:
+        con.append((1, "Attempts are slow and spread out, like a monitoring or inventory tool."))
+    if d["ports_tried"] < 40 and set(d["sample_ports"]) <= COMMON_SERVICE_PORTS:
+        con.append((1, "Only common service ports were checked, as network-discovery tools (printers, NAS apps) do."))
+    return pro, con
+
+
+def _service_refused(f: Finding, ctx: Context) -> tuple[Indicators, Indicators]:
+    d = f.details
+    con: Indicators = [
+        (2, f"{d['client_count']} different devices were refused by the same server and port: the service is "
+            "not running, it is not one client misbehaving."),
+        (1, "Refusals are immediate replies from the server itself, which is what a stopped service does."),
+    ]
+    return [], con
+
+
+def _connection_resets(f: Finding, ctx: Context) -> tuple[Indicators, Indicators]:
+    d = f.details
+    pro: Indicators = []
+    con: Indicators = []
+    if d["normal_ttl"] is not None and d["ttl_jump"] >= ctx.cfg["rst_ttl_jump"]:
+        pro.append((3, f"The resets arrive with a hop count (TTL {d['rst_ttl']}) different from the sender's normal "
+                       f"packets (TTL {d['normal_ttl']}): they may be forged by a third party."))
+    elif d["normal_ttl"] is not None:
+        con.append((2, f"The resets have the same hop count (TTL {d['rst_ttl']}) as the sender's normal packets: "
+                       "they really come from it."))
+    con.append((1, "Applications, crashes and firewalls closing idle sessions commonly reset connections."))
+    return pro, con
+
+
+def _retrans(f: Finding, ctx: Context) -> tuple[Indicators, Indicators]:
+    d = f.details
+    con: Indicators = [(2, f"{d['retransmissions']} of {d['data_segments']} data packets ({d['rate']:.0%}) had to be "
+                          "sent again: classic packet loss on a weak or overloaded link.")]
+    if d["bad_flows"] > 1:
+        con.append((1, f"Loss affects {d['bad_flows']} separate connections, so it is the path, not one app."))
+    if d["ack_gaps"] >= 5:
+        con.append((1, "The capture itself also missed packets, so part of this may be recording loss."))
+    return [], con
+
+
+def _dns_fail(f: Finding, ctx: Context) -> tuple[Indicators, Indicators]:
+    d = f.details
+    what = "went unanswered" if f.kind == "dns_timeout" else "were refused or failed"
+    con: Indicators = [(2, f"{d['failures']} of {d['queries']} DNS questions to {d['server']} {what}.")]
+    if d["client_count"] > 1:
+        con.append((1, f"{d['client_count']} devices are affected, pointing at the server or its internet link."))
+    return [], con
+
+
+def _nxdomain(f: Finding, ctx: Context) -> tuple[Indicators, Indicators]:
+    d = f.details
+    pro: Indicators = []
+    con: Indicators = []
+    random_names = d["avg_entropy"] >= 3.3 and d["avg_label_len"] >= 10
+    if random_names and d["distinct_names"] >= 10:
+        pro.append((3, f"{d['distinct_names']} different random-looking names were looked up (e.g. "
+                       f"{', '.join(d['names'][:2])}): malware uses such generated names to find its server."))
+    if d["distinct_names"] <= 3:
+        con.append((2, f"The same {d['distinct_names']} name(s) keep failing: looks like a typo or an old setting."))
+    if not random_names:
+        con.append((2, "The names look human-made, not randomly generated."))
+    return pro, con
+
+
+def _rogue_dhcp(f: Finding, ctx: Context) -> tuple[Indicators, Indicators]:
+    d = f.details
+    pro: Indicators = []
+    con: Indicators = []
+    same_router = set(d["rogue_router"]) == set(d["legit_router"])
+    same_dns = set(d["rogue_dns"]) == set(d["legit_dns"])
+    if not same_router:
+        pro.append((2, f"It tells devices to use {', '.join(d['rogue_router']) or 'no'} as their router instead of "
+                       f"{', '.join(d['legit_router']) or 'the normal one'}."))
+    if d["rogue_ip"] in d["rogue_router"]:
+        pro.append((2, "It names itself as the router, so new devices send all their traffic through it."))
+    if not same_dns:
+        pro.append((2, f"It hands out a different DNS server ({', '.join(d['rogue_dns']) or 'none'}), which can "
+                       "redirect websites."))
+    if d["rogue_ip"] in d["rogue_dns"]:
+        pro.append((1, "It names itself as the DNS server."))
+    if d["acks"] and d["client_count"]:
+        pro.append((1, f"{d['client_count']} device(s) accepted its settings."))
+    if same_router and same_dns:
+        con.append((3, "It hands out exactly the same router and DNS as the main server, like a backup DHCP server."))
+    if d["rogue_mac"] and d["rogue_mac"] == d["legit_mac"]:
+        con.append((2, "Both servers are the same physical device (same MAC)."))
+    if not d["acks"]:
+        con.append((1, "No device accepted its offers."))
+    return pro, con
+
+
 JUDGES: dict[str, JudgeFn] = {
     "ip_conflict": _ip_conflict,
+    "port_scan": _port_scan,
+    "service_refused": _service_refused,
+    "connection_resets": _connection_resets,
+    "tcp_retransmissions": _retrans,
+    "dns_timeout": _dns_fail,
+    "dns_servfail": _dns_fail,
+    "dns_nxdomain": _nxdomain,
+    "rogue_dhcp": _rogue_dhcp,
 }
 
 

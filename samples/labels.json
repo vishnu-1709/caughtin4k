@@ -1,4 +1,21 @@
 {
+  "mixed_attack_and_fault.pcap": {
+    "description": "An attacker intercepts a laptop (and slows it down) while the NAS is down.",
+    "expected": [
+      {
+        "kind": "arp_spoofing",
+        "verdict": "attack"
+      },
+      {
+        "kind": "tcp_retransmissions",
+        "verdict": "fault"
+      },
+      {
+        "kind": "service_refused",
+        "verdict": "fault"
+      }
+    ]
+  },
   "clean.pcap": {
     "description": "A normal two-minute office capture with no problems.",
     "expected": []
@@ -17,6 +34,59 @@
     "expected": [
       {
         "kind": "duplicate_ip",
+        "verdict": "fault"
+      }
+    ]
+  },
+  "port_scan.pcap": {
+    "description": "A device scans another for open ports (Nmap-style SYN scan).",
+    "expected": [
+      {
+        "kind": "port_scan",
+        "verdict": "attack"
+      }
+    ]
+  },
+  "rogue_dhcp_dns_hijack.pcap": {
+    "description": "A fake DHCP server makes itself the DNS server and redirects github.com.",
+    "expected": [
+      {
+        "kind": "rogue_dhcp",
+        "verdict": "attack"
+      },
+      {
+        "kind": "dns_hijack",
+        "verdict": "attack"
+      }
+    ]
+  },
+  "dns_failures.pcap": {
+    "description": "The router's DNS stops answering for a while, then returns errors.",
+    "expected": [
+      {
+        "kind": "dns_timeout",
+        "verdict": "fault"
+      },
+      {
+        "kind": "dns_servfail",
+        "verdict": "fault"
+      }
+    ]
+  },
+  "tcp_retransmissions.pcap": {
+    "description": "A laptop on weak Wi-Fi keeps losing packets.",
+    "expected": [
+      {
+        "kind": "tcp_retransmissions",
+        "verdict": "fault"
+      }
+    ]
+  },
+  "tcp_resets_service_down.pcap": {
+    "description": "The file-sharing service on the office NAS has stopped.",
+    "expected": [
+      {
+        "kind": "service_refused",
         "verdict": "fault"
       }
     ]

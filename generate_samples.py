@@ -260,12 +260,154 @@ def duplicate_ip() -> Net:
     return net
 
 
+def _syn(net: Net, t: float, src: tuple, dst: tuple, sport: int, dport: int) -> None:
+    net.add(t, Ether(src=src[1], dst=dst[1]) / IP(src=src[0], dst=dst[0], ttl=64) /
+            TCP(sport=sport, dport=dport, flags="S", seq=net.rng.randint(1, 2**31), window=1024))
+
+
+def port_scan() -> Net:
+    """The attacker SYN-scans the Raspberry Pi (Nmap style): 220 ports in ~6 seconds."""
+    net = Net(4)
+    net.background(120, hosts=HOSTS + [ATTACKER])
+    target, open_ports = PI, {22, 80}
+    ports = list(range(1, 201)) + [443, 445, 3306, 3389, 5900, 8080, 8443, 9100, 139, 631, 993, 995, 21, 23,
+                                   25, 110, 143, 161, 389, 5432]
+    sport = 61234
+    for i, port in enumerate(sorted(set(ports))):
+        t = 50 + i * 0.027
+        _syn(net, t, ATTACKER, target, sport, port)
+        if port in open_ports:
+            net.add(t + 0.0004, Ether(src=target[1], dst=ATTACKER[1]) / IP(src=target[0], dst=ATTACKER[0], ttl=64) /
+                    TCP(sport=port, dport=sport, flags="SA", seq=net.rng.randint(1, 2**31), ack=1))
+            net.add(t + 0.0008, Ether(src=ATTACKER[1], dst=target[1]) / IP(src=ATTACKER[0], dst=target[0], ttl=64) /
+                    TCP(sport=sport, dport=port, flags="R", seq=1))
+        elif port % 7:  # most closed ports answer with RST; some are filtered (no reply)
+            net.add(t + 0.0004, Ether(src=target[1], dst=ATTACKER[1]) / IP(src=target[0], dst=ATTACKER[0], ttl=64) /
+                    TCP(sport=port, dport=sport, flags="RA", seq=0, ack=1))
+    return net
+
+
+def tcp_resets_service_down() -> Net:
+    """The office NAS's file-sharing service (SMB, 445) has stopped: every client is refused."""
+    net = Net(5)
+    net.background(120)
+    for i, h in enumerate([LAPTOP, MACBOOK, PI, LAPTOP, MACBOOK, LAPTOP, PI, MACBOOK]):
+        for retry in range(2):
+            t = 20 + i * 11 + retry * 0.6
+            sport = 50000 + i * 10 + retry
+            _syn(net, t, h, NAS, sport, 445)
+            net.add(t + 0.0006, Ether(src=NAS[1], dst=h[1]) / IP(src=NAS[0], dst=h[0], ttl=64) /
+                    TCP(sport=445, dport=sport, flags="RA", seq=0, ack=1))
+    net.arp_exchange(19.5, LAPTOP, NAS)
+    return net
+
+
+def tcp_retransmissions() -> Net:
+    """The MacBook on weak Wi-Fi: its downloads keep losing packets."""
+    net = Net(6)
+    net.background(120)
+    for k in range(5):
+        t = 20 + k * 18
+        lost = set(net.rng.sample(range(24), 6))
+        net.tcp_session(t, MACBOOK, SITES["debian.org"], segments=24, retrans=lost, retrans_wait=0.25, rtt=0.05)
+    return net
+
+
+def dns_failures() -> Net:
+    """The router's DNS forwarder loses its upstream: queries time out, then return SERVFAIL."""
+    net = Net(7)
+    outage = (40.0, 85.0)
+    net.background(120, skip=lambda t, h: outage[0] <= t <= outage[1])
+    names = list(SITES)
+    for k in range(18):
+        t = outage[0] + k * 1.4
+        h = HOSTS[k % 4]
+        net.dns(t, h, names[k % len(names)], reply=False)
+        net.dns(t + 1.0, h, names[k % len(names)], reply=False)  # retry, also unanswered
+    for k in range(8):
+        t = 66 + k * 2.2
+        net.dns(t, HOSTS[k % 4], names[(k + 3) % len(names)], rcode=2, delay=0.9)
+    return net
+
+
+def rogue_dhcp_dns_hijack() -> Net:
+    """A rogue DHCP server makes itself DNS; it then answers 'github.com' with its own address."""
+    net = Net(8)
+    hosts = HOSTS + [ATTACKER]
+    net.background(120, hosts=hosts)
+    phone = ("192.168.1.77", "8c:85:90:12:34:77")  # an Apple phone joining the Wi-Fi
+    tablet = ("192.168.1.78", "f4:f5:d8:ab:cd:78")  # a Google tablet joining later
+    # legit DHCP for the tablet, rogue wins the race for the phone
+    xid = 0x5A5A1001
+    net.add(30.0, Ether(src=phone[1], dst=BCAST) / IP(src="0.0.0.0", dst="255.255.255.255") /
+            UDP(sport=68, dport=67) / BOOTP(op=1, xid=xid, chaddr=bytes.fromhex(phone[1].replace(":", "")) + b"\0" * 10) /
+            DHCP(options=[("message-type", "discover"), "end"]))
+    net.dhcp_reply(30.002, "offer", phone[1], phone[0], ATTACKER, ATTACKER[0], ATTACKER[0], xid)  # rogue: fast
+    net.dhcp_reply(30.009, "offer", phone[1], "192.168.1.120", GW, GW[0], GW[0], xid)  # real: slower
+    net.add(30.02, Ether(src=phone[1], dst=BCAST) / IP(src="0.0.0.0", dst="255.255.255.255") /
+            UDP(sport=68, dport=67) / BOOTP(op=1, xid=xid, chaddr=bytes.fromhex(phone[1].replace(":", "")) + b"\0" * 10) /
+            DHCP(options=[("message-type", "request"), ("requested_addr", phone[0]), ("server_id", ATTACKER[0]), "end"]))
+    net.dhcp_reply(30.023, "ack", phone[1], phone[0], ATTACKER, ATTACKER[0], ATTACKER[0], xid)
+    net.dhcp_dora(70.0, tablet[1], tablet[0], GW, GW[0], GW[0])
+    # the phone now uses the attacker as DNS: real-looking answers, except github.com -> attacker
+    for k, name in enumerate(["example.com", "github.com", "wikipedia.org", "github.com", "python.org", "github.com"]):
+        t = 32 + k * 9
+        answer = ATTACKER[0] if name == "github.com" else SITES[name]
+        net.dns(t, phone, name, answer, server=ATTACKER, answer_ttl=60)
+        if name != "github.com":
+            net.tcp_session(t + 0.1, phone, SITES[name], client_l2_dst=ATTACKER[1], segments=2)
+    # the tablet uses the real DNS and gets the real github address
+    net.dns(75, tablet, "github.com", SITES["github.com"])
+    return net
+
+
+def mixed_attack_and_fault() -> Net:
+    """ARP spoofing slows the laptop down (it now loses packets), while the NAS service is down."""
+    net = Net(9)
+    net.background(150, hosts=HOSTS + [ATTACKER], sessions=34)
+    victim = LAPTOP
+    for k in range(45):
+        t = 40 + k * 2.0
+        net.arp_reply(t, GW[0], ATTACKER[1], victim)
+        net.arp_reply(t + 0.01, victim[0], ATTACKER[1], GW)
+    for k in range(5):  # traffic via the attacker: slower and lossy
+        t = 48 + k * 15
+        lost = set(net.rng.sample(range(16), 4))
+        net.tcp_session(t, victim, SITES["github.com"], client_l2_dst=ATTACKER[1], segments=16, retrans=lost,
+                        retrans_wait=0.4, rtt=0.12)
+    for i, h in enumerate([MACBOOK, PI, MACBOOK, PI, MACBOOK]):  # unrelated fault: NAS file sharing down
+        t = 25 + i * 20
+        _syn(net, t, h, NAS, 51000 + i, 445)
+        net.add(t + 0.0006, Ether(src=NAS[1], dst=h[1]) / IP(src=NAS[0], dst=h[0], ttl=64) /
+                TCP(sport=445, dport=51000 + i, flags="RA", seq=0, ack=1))
+    return net
+
+
 SCENARIOS: dict[str, tuple[Callable[[], Net], str, list[dict]]] = {
+    "mixed_attack_and_fault.pcap": (mixed_attack_and_fault,
+                                    "An attacker intercepts a laptop (and slows it down) while the NAS is down.",
+                                    [{"kind": "arp_spoofing", "verdict": "attack"},
+                                     {"kind": "tcp_retransmissions", "verdict": "fault"},
+                                     {"kind": "service_refused", "verdict": "fault"}]),
     "clean.pcap": (clean, "A normal two-minute office capture with no problems.", []),
     "arp_spoof.pcap": (arp_spoof, "A device pretends to be the router to intercept a laptop's traffic.",
                        [{"kind": "arp_spoofing", "verdict": "attack"}]),
     "duplicate_ip.pcap": (duplicate_ip, "Two devices were given the same IP address by mistake.",
                           [{"kind": "duplicate_ip", "verdict": "fault"}]),
+    "port_scan.pcap": (port_scan, "A device scans another for open ports (Nmap-style SYN scan).",
+                       [{"kind": "port_scan", "verdict": "attack"}]),
+    "rogue_dhcp_dns_hijack.pcap": (rogue_dhcp_dns_hijack,
+                                   "A fake DHCP server makes itself the DNS server and redirects github.com.",
+                                   [{"kind": "rogue_dhcp", "verdict": "attack"},
+                                    {"kind": "dns_hijack", "verdict": "attack"}]),
+    "dns_failures.pcap": (dns_failures, "The router's DNS stops answering for a while, then returns errors.",
+                          [{"kind": "dns_timeout", "verdict": "fault"},
+                           {"kind": "dns_servfail", "verdict": "fault"}]),
+    "tcp_retransmissions.pcap": (tcp_retransmissions, "A laptop on weak Wi-Fi keeps losing packets.",
+                                 [{"kind": "tcp_retransmissions", "verdict": "fault"}]),
+    "tcp_resets_service_down.pcap": (tcp_resets_service_down,
+                                     "The file-sharing service on the office NAS has stopped.",
+                                     [{"kind": "service_refused", "verdict": "fault"}]),
 }
 
 
