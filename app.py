@@ -41,7 +41,7 @@ GROUP_ORDER = ["Multi-step", "Attacks", "Faults", "Harmless", "Bad files"]
 MAX_PARALLEL = 2  # analyses running at once on this server (protects the free host from overload)
 RATE_LIMIT = (8, 60)  # at most 8 analyses per browser session per 60 seconds
 
-st.set_page_config(page_title="CaughtIn4K", page_icon="🔎", layout="wide")
+st.set_page_config(page_title="CaughtIn4K", page_icon="", layout="wide")
 
 st.markdown("""<style>
 .block-container {max-width: 1120px; padding-top: 2rem;}
