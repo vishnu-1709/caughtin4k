@@ -82,3 +82,27 @@ def test_harmless_look_alikes_are_not_attacks(run):
     assert [(f.kind, f.verdict) for f in swap] == [("ip_conflict", "uncertain")]
     assert run("busy_browsing.pcap").findings == []
     assert [(f.kind, f.verdict) for f in run("backup_dhcp.pcap").findings] == [("rogue_dhcp", "fault")]
+
+
+def test_attack_chain_is_one_multi_step_incident(run):
+    r = run("attack_chain.pcap")
+    assert {(f.kind, f.verdict) for f in r.findings} == {("port_scan", "attack"), ("arp_spoofing", "attack"),
+                                                          ("dns_hijack", "attack")}
+    assert len(r.incidents) == 1
+    inc = r.incidents[0]
+    assert inc.summary.startswith("Multi-step attack") and len(inc.steps) == 3 and inc.severity == "critical"
+    spoof = one(r, "arp_spoofing")
+    assert spoof.details["relayed_out"] >= 5  # the impostor really forwards traffic (man in the middle)
+    assert one(r, "dns_hijack").details["forged_macs"] == ["dc:a6:32:9f:66:66"]
+
+
+def test_cleartext_credentials_found_and_masked(run):
+    found = [f for f in run("cleartext_logins.pcap").findings if f.kind == "cleartext_credentials"]
+    assert sorted(f.details["protocol"] for f in found) == ["FTP", "HTTP"]
+    users = {u for f in found for u in f.details["users"]}
+    assert users == {"s***r", "a***n"}
+
+
+def test_every_finding_has_severity(run):
+    for name in ("mixed_attack_and_fault.pcap", "attack_chain.pcap", "dns_failures.pcap"):
+        assert all(f.severity in ("critical", "high", "medium", "low") for f in run(name).findings)

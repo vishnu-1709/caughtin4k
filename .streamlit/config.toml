@@ -12,9 +12,15 @@ showWidgetBorder = true
 
 [server]
 maxUploadSize = 50
+# security: keep Streamlit's request-forgery and cross-origin protections explicitly on
+enableXsrfProtection = true
+enableCORS = true
+enableStaticServing = false
 
 [browser]
 gatherUsageStats = false
 
 [client]
 toolbarMode = "minimal"
+# never show stack traces or internal details to visitors
+showErrorDetails = "none"

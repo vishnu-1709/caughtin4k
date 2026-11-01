@@ -12,6 +12,8 @@ import json
 import os
 import re
 import tempfile
+import threading
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -19,6 +21,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
+from engine import __version__
 from engine.analyze import Result, analyze_safe
 from engine.checks import CHECKS, check_status
 from engine.config import DEFAULTS
@@ -32,12 +35,17 @@ SAMPLES = os.path.join(ROOT, "samples")
 MAX_MB = DEFAULTS["max_file_mb"]
 COLORS = {"attack": "#F04438", "fault": "#F79009", "healthy": "#12B76A", "uncertain": "#98A2B3"}
 LABELS = {"attack": "ATTACK", "fault": "FAULT", "uncertain": "UNCERTAIN"}
+SEV_COLORS = {"critical": "#F04438", "high": "#F79009", "medium": "#FDB022", "low": "#98A2B3"}
+SEV_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+GROUP_ORDER = ["Multi-step", "Attacks", "Faults", "Harmless", "Bad files"]
+MAX_PARALLEL = 2  # analyses running at once on this server (protects the free host from overload)
+RATE_LIMIT = (8, 60)  # at most 8 analyses per browser session per 60 seconds
 
 st.set_page_config(page_title="CaughtIn4K", page_icon="🔎", layout="wide")
 
 st.markdown("""<style>
 .block-container {max-width: 1120px; padding-top: 2rem;}
-.ci-tag {color:#94A3B8; margin-top:-0.6rem;}
+.ci-tag {color:#94A3B8; margin-top:0;}
 .ci-privacy {color:#94A3B8; font-size:0.9rem;}
 .ci-banner {border-radius:6px; padding:14px 18px; margin:6px 0 10px 0; border:1px solid #1F2A44;}
 .ci-banner h3 {margin:0; padding:0; font-size:1.35rem;}
@@ -56,6 +64,15 @@ st.markdown("""<style>
 .ci-dot {display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px;}
 .ci-checks {display:grid; grid-template-columns:1fr 1fr; gap:4px 28px;}
 .ci-checks div {font-size:0.9rem; padding:2px 0;}
+.ci-sev {display:inline-block; padding:1px 7px; border-radius:4px; font-size:0.76rem; font-weight:600;
+         border:1px solid; margin-right:8px; text-transform:uppercase; letter-spacing:0.03em;}
+.ci-brand {display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:6px;}
+.ci-brand h1 {margin:0 0 6px 0; padding:0; line-height:1.2;}
+.ci-steps {margin:6px 0 0 0; padding-left:1.2rem;}
+.ci-steps li {margin:3px 0;}
+.ci-kv td {padding:3px 12px 3px 0; vertical-align:top;}
+.ci-kv td:first-child {color:#94A3B8; white-space:nowrap;}
+.ci-ok {color:#12B76A; margin-right:6px;}
 @media (max-width: 640px) {.ci-checks {grid-template-columns:1fr;}}
 </style>""", unsafe_allow_html=True)
 
@@ -76,7 +93,6 @@ def html_block(markup: str) -> None:
 
 
 # --------------------------------------------------------------------------- data
-@st.cache_data(show_spinner=False)
 def load_labels() -> dict:
     try:
         with open(os.path.join(SAMPLES, "labels.json")) as fh:
@@ -86,7 +102,32 @@ def load_labels() -> dict:
     return {k: v for k, v in labels.items() if os.path.isfile(os.path.join(SAMPLES, k))}
 
 
+@st.cache_resource
+def _slots() -> threading.BoundedSemaphore:
+    """Shared by all visitors of this server: limits how many analyses run at the same time."""
+    return threading.BoundedSemaphore(MAX_PARALLEL)
+
+
+def _check_rate() -> None:
+    now = time.monotonic()
+    runs = [t for t in st.session_state.get("runs", []) if now - t < RATE_LIMIT[1]]
+    if len(runs) >= RATE_LIMIT[0]:
+        raise CaptureError("rate")
+    st.session_state["runs"] = runs + [now]
+
+
 def analyse(path: str, display_name: str, preview: dict) -> Result:
+    _check_rate()
+    slots = _slots()
+    if not slots.acquire(timeout=45):
+        raise CaptureError("busy")
+    try:
+        return _analyse(path, display_name, preview)
+    finally:
+        slots.release()
+
+
+def _analyse(path: str, display_name: str, preview: dict) -> Result:
     total = max(preview.get("packets", 1), 1)
     bar = st.progress(0.0, text="Reading packets…")
 
@@ -161,8 +202,10 @@ def banner(r: Result) -> None:
         color, head = COLORS["healthy"], "Network looks healthy"
         start = f"No faults or attacks found in {r.packets_read:,} packets. Check the coverage note for what this capture can show."
     if r.incidents and len(r.incidents) < len(r.findings):
-        start += (f" These {len(r.findings)} issues come from {len(r.incidents)} separate "
-                  f"incident{'s' if len(r.incidents) > 1 else ''} (see the 🔗 links on the cards).")
+        start += (f" These {len(r.findings)} issues are one connected incident (see the Incidents tab)."
+                  if len(r.incidents) == 1 else
+                  f" These {len(r.findings)} issues come from {len(r.incidents)} separate incidents "
+                  "(see the Incidents tab).")
     html_block(f'<div class="ci-banner" style="border-left:6px solid {color}; background:#111A2E;">'
                f'<h3 style="color:{color}">{esc(head)}</h3><p>{esc(start)}</p></div>')
 
@@ -212,6 +255,7 @@ def card(f: Finding, r: Result, technical: bool) -> None:
         html_block(
             f'<div class="ci-card">'
             f'<span class="ci-badge" style="background:{color}">{LABELS.get(f.verdict, "?")}</span>'
+            f'{sev_badge(f.severity)}'
             f'<span class="ci-meta">{esc(f.confidence)} confidence · {rel(f.time_start, r)} – {rel(f.time_end, r)}'
             f' · {len(f.evidence_frames)} packets of evidence</span>'
             f'<div class="ci-title">{esc(title)}</div>'
@@ -349,8 +393,159 @@ def capture_guide(expanded: bool) -> None:
             f"{MAX_MB} MB).")
 
 
+def sev_badge(level: str) -> str:
+    c = SEV_COLORS.get(level, SEV_COLORS["low"])
+    return f'<span class="ci-sev" style="color:{c}; border-color:{c}">{esc(level)}</span>'
+
+
+def downloads(view: Result, hide: bool) -> None:
+    d1, d2, d3, d4 = st.columns([1, 1, 1, 1.4])
+    d1.download_button("⬇ HTML report", to_html(view), file_name=safe_filename(view.file_name, ".html"),
+                       mime="text/html", width="stretch", help="Printable report: summary, issues, evidence, traffic")
+    d2.download_button("⬇ JSON", to_json(view), file_name=safe_filename(view.file_name, ".json"),
+                       mime="application/json", width="stretch", help="Everything, machine-readable")
+    d3.download_button("⬇ Evidence CSV", to_csv(view), file_name=safe_filename(view.file_name, "-evidence.csv"),
+                       mime="text/csv", width="stretch", help="Every packet cited as evidence")
+    d4.caption("Reports hold the analysis and packet summaries, never the capture."
+               + (" Addresses are masked (Hide IPs is on)." if hide else ""))
+
+
+def incidents_tab(r: Result) -> None:
+    if not r.incidents:
+        st.caption("No incidents: nothing was found in this capture.")
+        return
+    st.caption("Related issues (shared devices and time, or the same attacker) are grouped into incidents, "
+               "so one root cause reads as one story.")
+    by_id = {f.id: f for f in r.findings}
+    for inc in r.incidents:
+        members = [by_id[i] for i in inc.finding_ids if i in by_id]
+        color = COLORS.get(inc.verdict, COLORS["uncertain"])
+        steps = inc.steps or [f"{max(f.time_start - r.start, 0):.0f}s · {f.title_simple}" for f in members]
+        with st.container(border=True):
+            html_block(f'<div class="ci-card"><span class="ci-badge" style="background:{color}">'
+                       f'{LABELS.get(inc.verdict, "?")}</span>{sev_badge(inc.severity)}'
+                       f'<span class="ci-meta">{esc(inc.id)} · {len(members)} issue{"s" if len(members) != 1 else ""} · '
+                       f'{rel(inc.time_start, r)} – {rel(inc.time_end, r)}</span>'
+                       f'<div class="ci-title">{esc(inc.summary)}</div>'
+                       + (f'<div class="ci-link">🔗 {esc(inc.caused_by)}</div>' if inc.caused_by else "")
+                       + '<div class="ci-muted" style="margin-top:6px">What happened, in order</div>'
+                       f'<ol class="ci-steps">{"".join(f"<li>{esc(x)}</li>" for x in steps)}</ol>'
+                       + (f'<div class="ci-meta" style="margin-top:6px">Devices involved: '
+                          f'{esc(", ".join(inc.hosts[:8]))}{" …" if len(inc.hosts) > 8 else ""}</div>')
+                       + '</div>')
+
+
+def traffic_tab(r: Result) -> None:
+    if r.activity:
+        rows = []
+        for b in r.activity:
+            for proto in ("TCP", "UDP", "ARP", "ICMP", "Other"):
+                if b.get(proto):
+                    rows.append({"Second": b["t"], "Protocol": proto, "Packets": b[proto]})
+        df = pd.DataFrame(rows)
+        width = r.activity[0]["width"]
+        bars = alt.Chart(df).mark_bar(opacity=0.9).encode(
+            x=alt.X("Second:Q", title="Seconds into the capture", bin=alt.Bin(step=width), scale=alt.Scale(nice=False)),
+            y=alt.Y("sum(Packets):Q", title=f"Packets per {width} s"),
+            color=alt.Color("Protocol:N", scale=alt.Scale(domain=["TCP", "UDP", "ARP", "ICMP", "Other"],
+                                                          range=["#2DD4BF", "#60A5FA", "#A78BFA", "#F472B6", "#64748B"]),
+                            legend=alt.Legend(orient="top", title=None)),
+            tooltip=["Second", "Protocol", "Packets"])
+        layers = [bars]
+        if r.incidents:
+            inc = pd.DataFrame([{"start": max(i.time_start - r.start, 0), "end": max(i.time_end - r.start, 0) + width,
+                                 "Incident": f"{i.id}: {i.summary[:60]}", "Verdict": i.verdict} for i in r.incidents])
+            layers.insert(0, alt.Chart(inc).mark_rect(opacity=0.12).encode(
+                x="start:Q", x2="end:Q",
+                color=alt.Color("Verdict:N", scale=alt.Scale(domain=list(LABELS), range=[COLORS[k] for k in LABELS]),
+                                legend=None),
+                tooltip=["Incident", "Verdict"]))
+        st.markdown("**Activity over time**")
+        st.altair_chart(alt.layer(*layers).resolve_scale(color="independent").properties(height=230), width="stretch")
+        st.caption("Shaded bands mark when each incident was active. Busy traffic at the same time does not by "
+                   "itself mean it caused the incident.")
+    capture_stats(r)
+    st.markdown("**Conversations** (largest first)")
+    if r.conversations:
+        df = pd.DataFrame([{"Endpoint A": c["a"], "Endpoint B": c["b"], "Protocol": c["proto"],
+                            "Packets": c["packets"], "Bytes": c["bytes"], "First frame": c["first_frame"],
+                            "Starts (s)": c["first"], "Duration (s)": c["duration"]} for c in r.conversations])
+        st.dataframe(df, hide_index=True, width="stretch", height=min(38 + 35 * len(df), 360))
+
+
+def evidence_tab(r: Result, technical: bool) -> None:
+    by_frame: dict[int, list[str]] = {}
+    for f in r.findings:
+        for n in f.evidence_frames:
+            by_frame.setdefault(n, []).append(f.title_technical if technical else f.title_simple)
+    if not by_frame:
+        st.caption("No evidence packets: nothing was found in this capture.")
+        return
+    titles = [f.title_technical if technical else f.title_simple for f in r.findings]
+    pick = st.selectbox("Show evidence for", ["All issues"] + titles, key="ev_pick")
+    rows = []
+    for n in sorted(by_frame):
+        if pick != "All issues" and pick not in by_frame[n]:
+            continue
+        row = r.frames.get(n)
+        if row:
+            ts, src, dst, proto, info = row
+            rows.append({"Frame": n, "Time (s)": round(max(ts - r.start, 0), 3), "Source": src, "Destination": dst,
+                         "Protocol": proto, "Info": info, "Supports": "; ".join(by_frame[n])[:160]})
+    st.caption(f"{len(rows)} packets. Frame numbers match Wireshark, so you can jump to them there "
+               "(Go → Go to Packet). Use the table's search icon to filter.")
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch", height=min(38 + 35 * len(rows), 480))
+
+
+def security_tab(r: Result, preview: dict) -> None:
+    c1, c2 = st.columns([1.15, 1])
+    with c1:
+        st.markdown("**File fingerprint**")
+        lim = r.meta.get("limits", {})
+        rows = [("File", r.file_name), ("Size", fmt_size(r.file_size)), ("Format", r.file_format),
+                ("SHA-256", r.sha256 or "-"), ("Packets analysed", f"{r.packets_read:,} (skipped {r.packets_skipped:,})"),
+                ("Link type", ", ".join(r.link_types) or "unknown"), ("Analysed at", r.meta.get("analysed_at", "-")),
+                ("Tool", r.meta.get("tool", f"CaughtIn4K {__version__}")),
+                ("Limits applied", f"{lim.get('max_file_mb', MAX_MB)} MB · {lim.get('max_packets', 0):,} packets · "
+                                   f"{lim.get('max_seconds', 0)} s parsing · {lim.get('memory_limit_mb', 0)} MB memory")]
+        html_block('<table class="ci-kv">' + "".join(
+            f'<tr><td>{esc(k)}</td><td class="{"ci-mono" if k == "SHA-256" else ""}" '
+            f'style="{"word-break:break-all" if k == "SHA-256" else ""}">'
+            f'{esc(v)}</td></tr>' for k, v in rows) + "</table>")
+        st.caption("The SHA-256 fingerprint identifies exactly which file this report is about "
+                   "(compare it with `sha256sum file.pcap`).")
+    with c2:
+        st.markdown("**How your file was protected**")
+        items = [
+            "Checked before reading: size limit and file type (magic bytes), so fake or zipped files are refused",
+            "Read packet by packet in a separate, sandboxed process with time, memory and CPU limits",
+            "Damaged or hostile packets are skipped, never allowed to crash the tool",
+            "Uploaded file deleted immediately after analysis; nothing is stored or logged",
+            "No internet connections, no telemetry, nothing sent to the analysed network",
+            "All text from packets is escaped before display, so code hidden in packets can't run",
+            "Passwords found in clear text are never shown; usernames are masked",
+            "Hide IPs masks every address, including in downloads",
+            f"At most {MAX_PARALLEL} analyses run at once and each visitor is rate-limited, to keep the service up",
+        ]
+        html_block("<div>" + "".join(f'<div style="margin:3px 0"><span class="ci-ok">✓</span>{esc(i)}</div>'
+                                     for i in items) + "</div>")
+
+
+def sample_picker(labels: dict) -> str:
+    groups = [g for g in GROUP_ORDER if any(v.get("group") == g for v in labels.values())]
+    group = st.segmented_control("Or try a sample", groups, default=None, key="sample_group",
+                                 help="17 synthetic captures, grouped by what they contain")
+    if not group:
+        st.caption("Pick a group to see its sample captures.")
+        return ""
+    names = [n for n, v in labels.items() if v.get("group") == group]
+    return st.selectbox("Sample", [""] + names, key=f"sample_{group}", label_visibility="collapsed",
+                        format_func=lambda n: "Choose a sample…" if not n else f"{n} — {labels[n]['description']}")
+
+
 # --------------------------------------------------------------------------- page
-html_block('<h1 style="margin-bottom:0">CaughtIn4K</h1>')
+html_block('<div class="ci-brand"><h1>🔎 CaughtIn4K</h1>'
+           f'<span class="ci-meta">Offline packet-capture diagnosis · {len(CHECKS)} checks · v{esc(__version__)}</span></div>')
 html_block('<div class="ci-tag">Upload a packet capture. Get the faults and attacks in it, explained in plain '
            'language, with the evidence and how to fix them.</div>')
 html_block('<div class="ci-privacy">🔒 Your file is analysed and deleted immediately. Nothing is stored. '
@@ -358,16 +553,12 @@ html_block('<div class="ci-privacy">🔒 Your file is analysed and deleted immed
 st.write("")
 
 labels = load_labels()
-sample_names = list(labels)
 left, right = st.columns([1.1, 1])
 with left:
     uploaded = st.file_uploader(f"Upload a capture (.pcap, .pcapng, .cap — up to {MAX_MB} MB)",
                                 type=["pcap", "pcapng", "cap"])
 with right:
-    sample = st.selectbox("Or try a sample", [""] + sample_names, index=0,
-                          format_func=lambda n: "Choose a sample…" if not n else f"{n} — {labels[n]['description']}")
-    if sample:
-        st.caption(labels[sample]["description"])
+    sample = sample_picker(labels)
 
 if uploaded is not None:
     key = ("upload", getattr(uploaded, "file_id", None) or f"{uploaded.name}:{uploaded.size}")
@@ -378,7 +569,8 @@ else:
 
 if key is None:
     st.session_state.pop("result", None)
-    st.info("No file yet. Upload a capture, or pick a sample on the right to see how CaughtIn4K works.")
+    st.session_state.pop("key", None)
+    st.info("No file yet. Upload a capture, or pick a sample group on the right to see how CaughtIn4K works.")
     capture_guide(expanded=True)
     checks_overview()
     st.stop()
@@ -403,7 +595,7 @@ if st.session_state.get("key") != key:
 
 if st.session_state.get("error"):
     st.error(st.session_state["error"], icon="🚫")
-    st.caption("Tip: pick a sample on the right to see a working example.")
+    st.caption("Tip: pick a sample group on the right to see a working example.")
     st.stop()
 
 result: Result | None = st.session_state.get("result")
@@ -422,7 +614,13 @@ if hide:
     view = st.session_state["redacted"]
 
 banner(view)
-metrics(view)
+m = st.columns(5)
+m[0].metric("Packets analysed", f"{view.packets_read:,}")
+m[1].metric("Duration", f"{view.duration:.0f} s")
+m[2].metric("Devices", f"{len({d['mac'] if d['mac'] != '-' else d['ip'] for d in view.devices}):,}")
+m[3].metric("Issues · incidents", f"{len(view.findings)} · {len(view.incidents)}")
+m[4].metric("Analysis time", f"{view.elapsed:.1f} s")
+downloads(view, hide)
 checks_strip(view)
 coverage(view)
 
@@ -438,29 +636,29 @@ with c3:
     st.segmented_control("Wording", ["Simple", "Technical"], default="Simple", key="wording")
 
 shown = [f for f in view.findings if flt == "all" or f.verdict == flt]
-if view.findings:
-    st.subheader("Issues")
-    if not shown:
+evidence_count = len({n for f in view.findings for n in f.evidence_frames})
+tabs = st.tabs([f"Issues ({len(shown)})", f"Incidents ({len(view.incidents)})", "Traffic", "Devices",
+                f"Evidence ({evidence_count})", "Security & privacy"])
+with tabs[0]:
+    if not view.findings:
+        st.success("No faults or attacks found. See “What we checked” above for everything that was examined.")
+    elif not shown:
         st.caption("Nothing in this category.")
     for f in shown:
         card(f, view, technical)
-    st.subheader("Timeline")
-    timeline(view, shown, technical)
-
-st.subheader("Devices")
-devices_table(view)
-st.subheader("Capture stats")
-capture_stats(view)
-st.subheader("Downloads")
-st.caption("Reports contain only the analysis and packet summaries, never the capture itself."
-           + (" Addresses are masked because Hide IPs is on." if hide else ""))
-d1, d2, d3 = st.columns(3)
-d1.download_button("HTML report", to_html(view), file_name=safe_filename(view.file_name, ".html"),
-                   mime="text/html", width="stretch")
-d2.download_button("JSON (all details)", to_json(view), file_name=safe_filename(view.file_name, ".json"),
-                   mime="application/json", width="stretch")
-d3.download_button("Evidence CSV", to_csv(view), file_name=safe_filename(view.file_name, "-evidence.csv"),
-                   mime="text/csv", width="stretch")
-html_block(f'<div class="ci-meta" style="margin-top:2rem">CaughtIn4K · own detection logic, Scapy used only to read '
-           f'packets · analysed {esc(view.file_name)} at '
+    if shown:
+        st.markdown("**Timeline**")
+        timeline(view, shown, technical)
+with tabs[1]:
+    incidents_tab(view)
+with tabs[2]:
+    traffic_tab(view)
+with tabs[3]:
+    devices_table(view)
+with tabs[4]:
+    evidence_tab(view, technical)
+with tabs[5]:
+    security_tab(view, st.session_state["preview"])
+html_block(f'<div class="ci-meta" style="margin-top:2rem">CaughtIn4K {esc(__version__)} · own detection logic, Scapy '
+           f'used only to read packets · analysed {esc(view.file_name)} at '
            f'{datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}</div>')

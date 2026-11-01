@@ -60,3 +60,24 @@ def test_output_path_traversal_refused(tmp_path):
                                        ("not_a_pcap.pcap", 3)])
 def test_cli_exit_codes(name, code, capsys):
     assert cli_main([os.path.join(SAMPLES, name), "--no-color"]) == code
+
+
+def test_passwords_never_leave_the_engine(run):
+    from engine.report import to_json
+    r = run("cleartext_logins.pcap")
+    for text in (to_json(r), to_html(r), to_csv(r)):
+        for secret in ("Winter2026!", "admin123", "PASS ", "password="):
+            assert secret not in text
+
+
+def test_malformed_huge_record_is_safe(run):
+    r = run("malformed_huge_record.pcap")
+    assert r.partial and r.packets_read >= 1
+
+
+def test_result_has_fingerprint(run):
+    import hashlib
+    r = run("clean.pcap")
+    with open(os.path.join(SAMPLES, "clean.pcap"), "rb") as fh:
+        assert r.sha256 == hashlib.sha256(fh.read()).hexdigest()
+    assert r.activity and r.conversations and r.meta["tool"].startswith("CaughtIn4K")

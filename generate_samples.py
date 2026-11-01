@@ -654,13 +654,13 @@ SCENARIOS: dict[str, tuple[Callable[[], Net], str, list[dict]]] = {
 
 
 GROUPS = {
-    "attack_chain.pcap": "Multi-step attack", "mixed_attack_and_fault.pcap": "Multi-step attack",
-    "rogue_dhcp_dns_hijack.pcap": "Multi-step attack",
-    "arp_spoof.pcap": "Attack", "port_scan.pcap": "Attack",
-    "clean.pcap": "Healthy or harmless", "router_replacement.pcap": "Healthy or harmless",
-    "busy_browsing.pcap": "Healthy or harmless", "backup_dhcp.pcap": "Healthy or harmless",
-    "malicious_xss_dnsname.pcap": "Broken or hostile file", "broken_truncated.pcap": "Broken or hostile file",
-    "not_a_pcap.pcap": "Broken or hostile file", "malformed_huge_record.pcap": "Broken or hostile file",
+    "attack_chain.pcap": "Multi-step", "mixed_attack_and_fault.pcap": "Multi-step",
+    "rogue_dhcp_dns_hijack.pcap": "Multi-step",
+    "arp_spoof.pcap": "Attacks", "port_scan.pcap": "Attacks",
+    "clean.pcap": "Harmless", "router_replacement.pcap": "Harmless",
+    "busy_browsing.pcap": "Harmless", "backup_dhcp.pcap": "Harmless",
+    "malicious_xss_dnsname.pcap": "Bad files", "broken_truncated.pcap": "Bad files",
+    "not_a_pcap.pcap": "Bad files", "malformed_huge_record.pcap": "Bad files",
 }
 
 
@@ -692,7 +692,7 @@ def main() -> None:
     labels["malformed_huge_record.pcap"] = {"description": "Hostile input: a corrupt record claims to hold 4 GB.",
                                             "expected": [], "expect_partial": True}
     for name in labels:
-        labels[name]["group"] = GROUPS.get(name, "Fault")
+        labels[name]["group"] = GROUPS.get(name, "Faults")
     print("broken_truncated.pcap, not_a_pcap.pcap, malformed_huge_record.pcap  (damaged / hostile inputs)")
     with open(os.path.join(OUT, "labels.json"), "w") as fh:
         json.dump(labels, fh, indent=2)

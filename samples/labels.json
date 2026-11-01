@@ -15,7 +15,7 @@
         "verdict": "attack"
       }
     ],
-    "group": "Multi-step attack"
+    "group": "Multi-step"
   },
   "cleartext_logins.pcap": {
     "description": "Passwords sent unencrypted (FTP and a plain-HTTP admin page).",
@@ -29,7 +29,7 @@
         "verdict": "fault"
       }
     ],
-    "group": "Fault"
+    "group": "Faults"
   },
   "mixed_attack_and_fault.pcap": {
     "description": "An attacker intercepts a laptop (and slows it down) while the NAS is down.",
@@ -47,12 +47,12 @@
         "verdict": "fault"
       }
     ],
-    "group": "Multi-step attack"
+    "group": "Multi-step"
   },
   "clean.pcap": {
     "description": "A normal two-minute office capture with no problems.",
     "expected": [],
-    "group": "Healthy or harmless"
+    "group": "Harmless"
   },
   "arp_spoof.pcap": {
     "description": "A device pretends to be the router to intercept a laptop's traffic.",
@@ -62,7 +62,7 @@
         "verdict": "attack"
       }
     ],
-    "group": "Attack"
+    "group": "Attacks"
   },
   "duplicate_ip.pcap": {
     "description": "Two devices were given the same IP address by mistake.",
@@ -72,7 +72,7 @@
         "verdict": "fault"
       }
     ],
-    "group": "Fault"
+    "group": "Faults"
   },
   "port_scan.pcap": {
     "description": "A device scans another for open ports (Nmap-style SYN scan).",
@@ -82,7 +82,7 @@
         "verdict": "attack"
       }
     ],
-    "group": "Attack"
+    "group": "Attacks"
   },
   "rogue_dhcp_dns_hijack.pcap": {
     "description": "A fake DHCP server makes itself the DNS server and redirects github.com.",
@@ -96,7 +96,7 @@
         "verdict": "attack"
       }
     ],
-    "group": "Multi-step attack"
+    "group": "Multi-step"
   },
   "dns_failures.pcap": {
     "description": "The router's DNS stops answering for a while, then returns errors.",
@@ -114,7 +114,7 @@
         "verdict": "fault"
       }
     ],
-    "group": "Fault"
+    "group": "Faults"
   },
   "tcp_retransmissions.pcap": {
     "description": "A laptop on weak Wi-Fi keeps losing packets.",
@@ -124,7 +124,7 @@
         "verdict": "fault"
       }
     ],
-    "group": "Fault"
+    "group": "Faults"
   },
   "mtu.pcap": {
     "description": "A link with a smaller MTU: big packets are rejected or silently dropped.",
@@ -138,7 +138,7 @@
         "verdict": "fault"
       }
     ],
-    "group": "Fault"
+    "group": "Faults"
   },
   "router_replacement.pcap": {
     "description": "Tricky but harmless: the router was replaced, so its MAC address changed.",
@@ -148,12 +148,12 @@
         "verdict": "uncertain"
       }
     ],
-    "group": "Healthy or harmless"
+    "group": "Harmless"
   },
   "busy_browsing.pcap": {
     "description": "Tricky but harmless: a laptop loads a page from 22 servers at once.",
     "expected": [],
-    "group": "Healthy or harmless"
+    "group": "Harmless"
   },
   "backup_dhcp.pcap": {
     "description": "Tricky but harmless: a second DHCP server with identical settings.",
@@ -163,7 +163,7 @@
         "verdict": "fault"
       }
     ],
-    "group": "Healthy or harmless"
+    "group": "Harmless"
   },
   "malicious_xss_dnsname.pcap": {
     "description": "Malicious input: DNS names containing <script> code (must display as text).",
@@ -173,7 +173,7 @@
         "verdict": "fault"
       }
     ],
-    "group": "Broken or hostile file"
+    "group": "Bad files"
   },
   "slow_handshakes.pcap": {
     "description": "A busy web server takes seconds to accept connections.",
@@ -183,7 +183,7 @@
         "verdict": "fault"
       }
     ],
-    "group": "Fault"
+    "group": "Faults"
   },
   "tcp_resets_service_down.pcap": {
     "description": "The file-sharing service on the office NAS has stopped.",
@@ -193,24 +193,24 @@
         "verdict": "fault"
       }
     ],
-    "group": "Fault"
+    "group": "Faults"
   },
   "broken_truncated.pcap": {
     "description": "Damaged input: a capture cut off in the middle of a packet.",
     "expected": [],
     "expect_partial": true,
-    "group": "Broken or hostile file"
+    "group": "Bad files"
   },
   "not_a_pcap.pcap": {
     "description": "Wrong input: a web page renamed to .pcap (must be rejected).",
     "expected": [],
     "expect_error": "not_pcap",
-    "group": "Broken or hostile file"
+    "group": "Bad files"
   },
   "malformed_huge_record.pcap": {
     "description": "Hostile input: a corrupt record claims to hold 4 GB.",
     "expected": [],
     "expect_partial": true,
-    "group": "Broken or hostile file"
+    "group": "Bad files"
   }
 }

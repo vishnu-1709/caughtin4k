@@ -66,6 +66,8 @@ class CaptureError(Exception):
         "broken": "This capture is damaged and could not be read at all.",
         "timeout": "Reading this capture took too long and was stopped. Try a shorter capture.",
         "internal": "Something went wrong while analysing this capture. No data was kept.",
+        "busy": "The server is busy analysing other captures. Please try again in a minute.",
+        "rate": "Too many analyses in a short time. Please wait a minute and try again.",
     }
 
     def __init__(self, code: str, **fmt: Any) -> None:

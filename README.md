@@ -17,12 +17,12 @@ packet capture that only experts can read, and **a harmless fault looks exactly 
 
 ## The solution
 
-CaughtIn4K reads a `.pcap` / `.pcapng` file safely, runs **10 checks** written by us, and for every issue gives:
+CaughtIn4K reads a `.pcap` / `.pcapng` file safely, runs **11 checks** written by us, and for every issue gives:
 
-- a verdict: **attack**, **fault** or **uncertain**, with the evidence for *both* sides;
+- a verdict: **attack**, **fault** or **uncertain**, with the evidence for *both* sides, plus a **severity** (critical → low);
 - a plain-language explanation, the likely cause and **numbered fix steps**;
 - the **exact packets** behind it, plus a Wireshark filter to verify it yourself;
-- **links between causes and effects** (e.g. *rogue DHCP → DNS hijack*).
+- **incidents that tell the story**: related issues are grouped and ordered, e.g. *scan → impersonate the router → fake the bank's DNS*.
 
 **What's different:** Wireshark shows packets without a diagnosis, and intrusion detectors (Snort, Suricata) report only attacks, for
 experts. CaughtIn4K diagnoses faults *and* attacks for beginners, and reasons openly about which one it is. The same
@@ -31,21 +31,31 @@ and **uncertain** in `router_replacement.pcap`.
 
 | Checks for attacks | Checks for faults |
 |---|---|
-| ARP spoofing · Port scans · DNS hijacking · Rogue DHCP servers | Duplicate IPs / ARP conflicts · Packet loss (TCP retransmissions) · Refused / reset connections · DNS failures · Unusual delays · MTU mismatches |
+| ARP spoofing · Port scans · DNS hijacking · Rogue DHCP servers | Duplicate IPs / ARP conflicts · Packet loss (TCP retransmissions) · Refused / reset connections · DNS failures · Unusual delays · MTU mismatches · Passwords sent unencrypted |
 
 ## Features
 
-- **Answer first:** a red / amber / green banner, then one card per issue (cause, fix steps, *Why we think so*,
-  *Could it be harmless?*, evidence table, Wireshark filter).
-- **What we checked:** every check shows *clear*, *found* or *no data in this capture*, plus notes on what the capture can't show.
+- **Answer first:** a red / amber / green banner and key numbers, then tabs:
+  - **Issues:** one card per problem with verdict, severity, confidence, plain explanation, numbered fix steps,
+    *Why we think so* (signs for and against), *Could it be harmless?*, evidence packets and a Wireshark filter.
+  - **Incidents:** related issues as one story, in time order (e.g. a multi-step attack).
+  - **Traffic:** activity over time with incident bands, protocols, top talkers, largest conversations.
+  - **Devices:** IP, MAC, vendor and role, with impostors and rogue servers highlighted.
+  - **Evidence:** every cited packet in one searchable table, with Wireshark frame numbers.
+  - **Security & privacy:** the file's SHA-256 fingerprint, the limits applied, and how the file was protected.
+- **What we checked:** every check shows *clear*, *found* or *no data in this capture*.
+- **Proof, not just alerts:** e.g. it shows that an ARP impostor actually **relays** traffic (man in the middle) and
+  **which device forged** DNS answers.
 - **Simple / Technical** wording, **Attacks / Faults / Uncertain** filter, **Hide IPs** (masks addresses everywhere, including downloads).
-- Timeline, devices table (vendor, role, impostors highlighted), protocol and top-talker stats.
-- Downloads: **HTML report** (summary, "do this first", printable), **JSON**, **evidence CSV**.
-- **CLI** using the same engine, and **17 sample captures**, so no network setup is needed.
+- Downloads: **HTML report** (contents, summary, "do this first", findings table, incidents, traffic, capture details
+  with SHA-256, method; printable), **JSON**, **evidence CSV**.
+- **CLI** using the same engine, and **20 sample captures** in 5 groups, so no network setup is needed.
 
-| Home | Issue card | HTML report |
+| Home | Incidents | Traffic |
 |---|---|---|
-| ![home](docs/screenshot-home.png) | ![card](docs/screenshot-card.png) | ![report](docs/screenshot-report.png) |
+| ![home](docs/screenshot-home.png) | ![incidents](docs/screenshot-incidents.png) | ![traffic](docs/screenshot-traffic.png) |
+| **Security & privacy** | **HTML report** | **Issue card** |
+| ![security](docs/screenshot-security.png) | ![report](docs/screenshot-report.png) | ![card](docs/screenshot-card.png) |
 
 ## Setup
 
@@ -89,13 +99,14 @@ python evaluate.py
 - Uploaded files are analysed and **deleted immediately**, even if something fails. Nothing is stored or logged.
 - The tool only reads files. It never captures traffic, sends packets or makes network calls (telemetry off).
 - **Hide IPs** / `--redact` masks IP and MAC addresses on screen and in every download.
+- Passwords found in clear-text logins are **never stored or shown**; usernames are masked (`a***n`).
 
 ## How it works
 
 ```mermaid
 flowchart LR
     A[pcap / pcapng] --> B[Safe loader]
-    B --> C[One pass: context + 10 detectors]
+    B --> C[One pass: context + 11 checks]
     C --> D[Judge: attack / fault / uncertain]
     D --> E[Explain: text, cause, fixes]
     E --> F[Group into incidents]
@@ -112,18 +123,19 @@ Code lives in `engine/`: `loader.py` (safe reading), `context.py` (devices, gate
 
 | Check | Rule |
 |---|---|
-| ARP spoofing / duplicate IP | One IP claimed by two MACs. The judge weighs signs like *router address involved, unasked replies, repeated claims, claimant also has its own IP* against *replies answer real requests, both devices have normal traffic, old device went silent (replacement)* |
+| ARP spoofing / duplicate IP | One IP claimed by two MACs. The judge weighs signs like *router address involved, unasked replies, repeated claims, claimant also has its own IP, claimant relays others' traffic* against *replies answer real requests, both devices have normal traffic, old device went silent (replacement)* |
 | Port scan | One source tries ≥15 ports or hosts within 60 s, and under 30% become real connections |
-| DNS hijacking | Answer from a server nobody asked, two different answers to one question, a public site resolving to a local address, or a DNS server handed out only by a rogue DHCP server |
+| DNS hijacking | Answer from a server nobody asked, two different answers to one question, a public site resolving to a local address, a DNS server handed out only by a rogue DHCP server, or answers sent from a different device than the real DNS server (forged) |
 | Rogue DHCP | More than one DHCP server answering; attack if it hands out a different router or DNS, fault if settings match (backup server) |
 | Packet loss | Same data (flow + sequence number) sent again: ≥5 times and ≥5% of a connection's data |
 | Resets | Many clients refused by one server:port = service down; mid-connection resets with an unusual TTL may be forged |
 | DNS failures | Questions with no answer in 2 s, high SERVFAIL/REFUSED rate, bursts of "no such name" (random-looking names flagged as possible malware) |
 | Delays | Connection setup or DNS answers slower than 3× the capture median (min. 300 ms / 500 ms), repeatedly |
 | MTU | ICMP "fragmentation needed", or big packets resent and never acknowledged while small ones pass |
+| Clear-text passwords | Login commands (FTP/POP3 `USER`/`PASS`, IMAP `LOGIN`, SMTP `AUTH`, HTTP Basic or a form `password=` field) sent unencrypted |
 
 **Judge:** each sign has a weight. *Attack* requires strong attack evidence that clearly beats the harmless explanation.
-Mixed evidence gives **uncertain**, and then the fix steps start with checks rather than drastic action. Confidence is low/medium/high (no fake percentages).
+Mixed evidence gives **uncertain**, and then the fix steps start with checks rather than drastic action. Confidence is low/medium/high (no fake percentages). **Severity** (critical/high/medium/low) says how much damage the problem can do. **Incidents** group issues that share devices and time, or the same attacker.
 
 ## Security
 
@@ -131,9 +143,12 @@ Mixed evidence gives **uncertain**, and then the fix steps start with checks rat
 |---|---|
 | Huge, broken or fake files | size limit before parsing, file-type check by magic bytes, streaming reader, bad packets skipped, truncated files give partial results |
 | Parser hangs or crashes | analysis runs in a separate process with time, memory and CPU limits |
+| Overloading the hosted service | at most 2 analyses at once and a per-visitor rate limit |
+| Proving which file was analysed | SHA-256 fingerprint shown in the app and in every report |
 | Script code inside packets (e.g. DNS names with `<script>`) | all packet text is escaped; the HTML report also blocks scripts with a Content-Security-Policy |
 | CSV / terminal / path tricks | spreadsheet formulas neutralised, control characters stripped, output paths can't leave the current folder |
-| Data leaks and secrets | uploads deleted right away, no logging of packet data, no network calls, no secrets in the repo |
+| Data leaks and secrets | uploads deleted right away, no logging of packet data, no network calls, passwords never shown, no secrets in the repo |
+| Web app hardening | XSRF and CORS protection explicitly on, error details hidden from visitors (`showErrorDetails = "none"`), telemetry off |
 
 ## Evaluation
 
@@ -141,6 +156,8 @@ Mixed evidence gives **uncertain**, and then the fix steps start with checks rat
 
 | Sample | Expected | Detected (verdict) | Missed | False positives | Verdicts right |
 |---|---|---|---|---|---|
+| `attack_chain.pcap` | port_scan (attack), arp_spoofing (attack), dns_hijack (attack) | arp_spoofing (attack), dns_hijack (attack), port_scan (attack) | — | — | ✅ |
+| `cleartext_logins.pcap` | cleartext_credentials (fault), cleartext_credentials (fault) | cleartext_credentials (fault), cleartext_credentials (fault) | — | — | ✅ |
 | `mixed_attack_and_fault.pcap` | arp_spoofing (attack), tcp_retransmissions (fault), service_refused (fault) | arp_spoofing (attack), service_refused (fault), tcp_retransmissions (fault) | — | — | ✅ |
 | `clean.pcap` | — | — | — | — | ✅ |
 | `arp_spoof.pcap` | arp_spoofing (attack) | arp_spoofing (attack) | — | — | ✅ |
@@ -158,9 +175,11 @@ Mixed evidence gives **uncertain**, and then the fix steps start with checks rat
 | `tcp_resets_service_down.pcap` | service_refused (fault) | service_refused (fault) | — | — | ✅ |
 | `broken_truncated.pcap` | — | partial result + warning | — | — | ✅ |
 | `not_a_pcap.pcap` | — | rejected (not_pcap) | — | — | ✅ |
+| `malformed_huge_record.pcap` | — | partial result + warning | — | — | ✅ |
 
-**19/19 issues found with the right verdict, 0 false alarms**, including three harmless look-alikes (router replacement,
-busy browsing, backup DHCP server). A 47 MB capture (97k packets) takes about 18 s.
+**24/24 issues found with the right verdict, 0 false alarms**, including three harmless look-alikes (router replacement,
+busy browsing, backup DHCP server) and three damaged or hostile files handled safely. A 47 MB capture (97k packets)
+takes about 18 s.
 
 The samples are synthetic (made with `generate_samples.py`) and were built alongside the rules. They show that each rule
 works as designed, but they don't measure accuracy on real-world traffic.
