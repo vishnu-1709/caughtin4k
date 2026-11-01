@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# User captures (only committed samples are allowed)
+*.pcap
+*.pcapng
+*.cap
+!samples/*.pcap
+!samples/*.pcapng
+
+# Reports and local outputs
+reports/
+*.html
+!templates/*.html
+
+# Secrets / editor
+.env
+.streamlit/secrets.toml
+.DS_Store
+.idea/
+.vscode/

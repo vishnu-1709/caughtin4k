@@ -1,0 +1,17 @@
+[theme]
+base = "dark"
+primaryColor = "#2DD4BF"
+backgroundColor = "#0B1220"
+secondaryBackgroundColor = "#111A2E"
+textColor = "#E2E8F0"
+font = "sans-serif"
+codeFont = "monospace"
+baseRadius = "small"
+borderColor = "#1F2A44"
+showWidgetBorder = true
+
+[server]
+maxUploadSize = 50
+
+[browser]
+gatherUsageStats = false
