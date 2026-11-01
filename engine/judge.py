@@ -52,6 +52,9 @@ def _ip_conflict(f: Finding, ctx: Context) -> tuple[Indicators, Indicators]:
     if d["both_send_traffic"]:
         con.append((2, "Both devices send their own normal traffic from this address, like two machines "
                        "that were given the same IP."))
+    if d.get("handover"):
+        con.append((2, "The old device went silent when the new one appeared: this looks like a replacement, "
+                       "not two devices fighting over the address."))
     if d["dad_conflicts"]:
         con.append((1, "A device checked whether the address was free and was told it was taken: "
                        "typical of a configuration clash."))
@@ -221,6 +224,24 @@ def _slow(f: Finding, ctx: Context) -> tuple[Indicators, Indicators]:
     return [], con
 
 
+def _mtu(f: Finding, ctx: Context) -> tuple[Indicators, Indicators]:
+    d = f.details
+    pro: Indicators = []
+    con: Indicators = []
+    if d["mode"] == "icmp":
+        con.append((2, f"A router ({d['router']}) reported {d['count']} time(s) that packets over {d['mtu']} bytes "
+                       "don't fit the next link: a normal size mismatch (VPN, PPPoE, tunnel)."))
+        if d["mtu"] and d["mtu"] < 576:
+            pro.append((3, f"The size it demands ({d['mtu']} bytes) is unrealistically small; forged "
+                           "'fragmentation needed' messages are used to slow or disrupt connections."))
+        if not d["router_is_local"]:
+            con.append((1, "The message comes from a router on the internet path, outside this network."))
+    else:
+        con.append((2, f"{d['large_retrans']} large packets ({d['max_size']} bytes, 'don't fragment' set) were "
+                       "re-sent and never acknowledged while small ones got through: a classic MTU black hole."))
+    return pro, con
+
+
 JUDGES: dict[str, JudgeFn] = {
     "ip_conflict": _ip_conflict,
     "port_scan": _port_scan,
@@ -234,6 +255,7 @@ JUDGES: dict[str, JudgeFn] = {
     "dns_hijack": _dns_hijack,
     "slow_responses": _slow,
     "slow_dns": _slow,
+    "mtu_mismatch": _mtu,
 }
 
 

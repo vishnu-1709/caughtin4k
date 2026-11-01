@@ -129,6 +129,7 @@ class ArpDetector(Detector):
                     "dad_conflicts": sum(len(self.dad_conflicts.get(ip, [])) // 2 for ip in ips),
                     "both_send_traffic": all(mac in traffic[ip] and originals[ip] in traffic[ip] for ip in ips),
                     "failover_mac": any(m.startswith(FAILOVER_PREFIXES) for m in [mac, *originals.values()]),
+                    "handover": all(self.claims[ip][originals[ip]]["last"] <= first + 1.0 for ip in ips),
                     "targets": targets[:20],
                     "targets_by_ip": {ip: sorted(self.claims[ip][mac]["targets"] - {ip})[:10] for ip in ips},
                 },

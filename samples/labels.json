@@ -86,6 +86,41 @@
       }
     ]
   },
+  "mtu.pcap": {
+    "description": "A link with a smaller MTU: big packets are rejected or silently dropped.",
+    "expected": [
+      {
+        "kind": "mtu_mismatch",
+        "verdict": "fault"
+      },
+      {
+        "kind": "mtu_mismatch",
+        "verdict": "fault"
+      }
+    ]
+  },
+  "router_replacement.pcap": {
+    "description": "Tricky but harmless: the router was replaced, so its MAC address changed.",
+    "expected": [
+      {
+        "kind": "ip_conflict",
+        "verdict": "uncertain"
+      }
+    ]
+  },
+  "busy_browsing.pcap": {
+    "description": "Tricky but harmless: a laptop loads a page from 22 servers at once.",
+    "expected": []
+  },
+  "backup_dhcp.pcap": {
+    "description": "Tricky but harmless: a second DHCP server with identical settings.",
+    "expected": [
+      {
+        "kind": "rogue_dhcp",
+        "verdict": "fault"
+      }
+    ]
+  },
   "malicious_xss_dnsname.pcap": {
     "description": "Malicious input: DNS names containing <script> code (must display as text).",
     "expected": [

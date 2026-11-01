@@ -88,6 +88,7 @@ class Context:
         self.gateway_ip: str | None = None
         self.gateway_mac: str | None = None
         self.has_ethernet = False
+        self.extra_notes: list[str] = []  # coverage notes added by detectors
 
     # ---------------------------------------------------------------- feeding
     def feed(self, v: PacketView) -> None:

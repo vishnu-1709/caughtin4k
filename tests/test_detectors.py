@@ -67,3 +67,18 @@ def test_spoofing_linked_to_packet_loss(run):
     assert spoof.incident_id == loss.incident_id != nas.incident_id
     assert "ARP spoofing" in loss.linked_text
     assert len(r.incidents) == 2
+
+
+def test_mtu_icmp_and_black_hole(run):
+    found = [f for f in run("mtu.pcap").findings if f.kind == "mtu_mismatch"]
+    assert sorted(f.details["mode"] for f in found) == ["blackhole", "icmp"]
+    assert all(f.verdict == "fault" for f in found)
+    icmp = next(f for f in found if f.details["mode"] == "icmp")
+    assert icmp.details["mtu"] == 1400
+
+
+def test_harmless_look_alikes_are_not_attacks(run):
+    swap = run("router_replacement.pcap").findings
+    assert [(f.kind, f.verdict) for f in swap] == [("ip_conflict", "uncertain")]
+    assert run("busy_browsing.pcap").findings == []
+    assert [(f.kind, f.verdict) for f in run("backup_dhcp.pcap").findings] == [("rogue_dhcp", "fault")]

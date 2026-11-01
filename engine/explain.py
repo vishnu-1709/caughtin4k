@@ -381,6 +381,42 @@ def _slow(f: Finding, ctx: Context) -> Texts:
     }
 
 
+def _mtu(f: Finding, ctx: Context) -> Texts:
+    d = f.details
+    if d["mode"] == "icmp":
+        who = ", ".join(ctx.device_label(x) for x in d["senders"][:2]) or "a device"
+        dest = ", ".join(ctx.device_label(x) for x in d["dests"][:2]) or "a server"
+        title = f"Packets from {who} are too big for the path to {dest}"
+        expl = (f"The router {ctx.device_label(d['router'])} said {d['count']} times that packets bigger than "
+                f"{d['mtu']} bytes can't pass. Big transfers stall or are slow until the sender shrinks its packets.")
+        tech = f"ICMP type 3 code 4 from {d['router']}, next-hop MTU {d['mtu']}, original sizes {d['sizes']}."
+        wf_title = f"ICMP fragmentation needed: next-hop MTU {d['mtu']} at {d['router']}"
+    else:
+        who, dest = ctx.device_label(d["src"]), ctx.device_label(d["dst"])
+        title = f"Large packets from {who} to {dest} silently disappear (MTU black hole)"
+        expl = (f"{who} keeps re-sending {d['max_size']}-byte packets that never arrive, while small ones do. "
+                "Pages or uploads start and then hang. Something on the path drops big packets without warning.")
+        tech = (f"{d['large_retrans']} retransmissions of DF segments ≥{d['max_size']} B, never ACKed; "
+                f"{d['small_sent']} small segments got through; no ICMP frag-needed seen.")
+        wf_title = f"PMTU black hole {d['src']} → {d['dst']}:{d['port']} ({d['max_size']} B DF segments)"
+    return {
+        "title_simple": title,
+        "title_technical": wf_title,
+        "explanation": expl,
+        "explanation_technical": tech,
+        "likely_cause": "A VPN, PPPoE (DSL) or tunnel link with a smaller MTU, and a firewall that blocks the "
+                        "ICMP messages needed to adjust packet size.",
+        "fix_steps": [
+            "Allow ICMP 'fragmentation needed' (type 3 code 4) through firewalls on the path.",
+            "Lower the MTU on the affected device or router interface (try 1400; for PPPoE 1492).",
+            "On the router/VPN, enable TCP MSS clamping so connections choose a size that fits.",
+            "Test: `ping -f -l 1472 <server>` (Windows) or `ping -M do -s 1472 <server>` (Linux); lower the size "
+            "until it passes, then add 28 to get the working MTU.",
+        ],
+        "benign_alternative": "This is a configuration fault, not an attack, unless the reported size is absurdly small.",
+    }
+
+
 TEMPLATES: dict[str, Callable[[Finding, Context], Texts]] = {
     "arp_spoofing": _arp,
     "duplicate_ip": _arp,
@@ -396,6 +432,7 @@ TEMPLATES: dict[str, Callable[[Finding, Context], Texts]] = {
     "dns_hijack": _dns_hijack,
     "slow_responses": _slow,
     "slow_dns": _slow,
+    "mtu_mismatch": _mtu,
 }
 
 

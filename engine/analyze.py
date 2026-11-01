@@ -181,6 +181,7 @@ def _notes(ctx: Context, stats: ReadStats, cfg: dict[str, Any],
     if not ctx.protocols.get("DHCP"):
         coverage.append("No DHCP traffic was recorded (it only appears when a device joins the network), "
                         "so the rogue DHCP check had nothing to inspect.")
+    coverage.extend(ctx.extra_notes)
     if ctx.protocols.get("IPv6"):
         coverage.append("IPv6-specific attacks (e.g. rogue router adverts) are not covered.")
     return warnings, coverage, skipped

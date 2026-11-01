@@ -407,6 +407,119 @@ def malicious_xss_dnsname() -> Net:
     return net
 
 
+def _upload(net: Net, t: float, client: tuple, server_ip: str, sizes: list[int], lost: set[int],
+            icmp_mtu: int | None = None) -> None:
+    """Client sends a small request then big DF segments. Segments in `lost` are dropped on the path:
+    the router either reports it (ICMP frag-needed) or stays silent (black hole)."""
+    rng = net.rng
+    sport, cseq, sseq = rng.randint(49152, 65000), rng.randint(1, 2**31), rng.randint(1, 2**31)
+
+    def c2s(tt, flags, payload=b""):
+        net.add(tt, Ether(src=client[1], dst=GW[1]) / IP(src=client[0], dst=server_ip, flags="DF", ttl=64) /
+                TCP(sport=sport, dport=443, flags=flags, seq=cseq, ack=sseq, window=64240) / Raw(payload)
+                if payload else Ether(src=client[1], dst=GW[1]) / IP(src=client[0], dst=server_ip, flags="DF") /
+                TCP(sport=sport, dport=443, flags=flags, seq=cseq, ack=sseq, window=64240))
+
+    def s2c(tt, flags, ack):
+        net.add(tt, Ether(src=GW[1], dst=client[1]) / IP(src=server_ip, dst=client[0], ttl=54, flags="DF") /
+                TCP(sport=443, dport=sport, flags=flags, seq=sseq, ack=ack, window=65535))
+
+    c2s(t, "S"); cseq += 1
+    s2c(t + 0.03, "SA", cseq); sseq += 1
+    c2s(t + 0.031, "A")
+    req = b"\x17\x03\x03" + bytes(rng.getrandbits(8) for _ in range(200))
+    c2s(t + 0.032, "PA", req); cseq += len(req)
+    s2c(t + 0.062, "A", cseq)
+    t += 0.07
+    for i, size in enumerate(sizes):
+        data = bytes(rng.getrandbits(8) for _ in range(size))
+        if i in lost:
+            for attempt in range(4 if icmp_mtu is None else 1):
+                c2s(t + attempt * 0.4 * (2 ** attempt), "PA", data)  # same seq: retransmissions
+                if icmp_mtu:
+                    inner = IPerror(src=client[0], dst=server_ip, flags="DF", len=size + 40, proto=6) / \
+                        TCPerror(sport=sport, dport=443, seq=cseq)
+                    net.add(t + 0.002, Ether(src=GW[1], dst=client[1]) / IP(src=GW[0], dst=client[0]) /
+                            ICMP(type=3, code=4, nexthopmtu=icmp_mtu) / inner)
+            if icmp_mtu:  # sender obeys: re-sends the data in two smaller pieces
+                half = len(data) // 2
+                c2s(t + 0.01, "PA", data[:half]); cseq += half
+                c2s(t + 0.011, "PA", data[half:]); cseq += len(data) - half
+                s2c(t + 0.05, "A", cseq)
+            t += 4.0
+        else:
+            c2s(t, "PA", data); cseq += size
+            s2c(t + 0.03, "A", cseq)
+            t += 0.05
+
+
+def mtu() -> Net:
+    """A VPN link with MTU 1400: the router reports it for one laptop; another path silently drops big packets."""
+    net = Net(12)
+    net.background(120)
+    for k in range(3):
+        _upload(net, 20 + k * 15, LAPTOP, "185.125.190.20", [1460, 1460, 600, 1460], lost={0, 1, 3}, icmp_mtu=1400)
+    _upload(net, 70, MACBOOK, "104.16.132.229", [400, 1460], lost={1})
+    return net
+
+
+def router_replacement() -> Net:
+    """Harmless look-alike of ARP spoofing: the router is swapped for a new one (new MAC) at t=55 s."""
+    net = Net(13)
+    net.background(120)
+    new_mac = "a0:40:a0:77:88:01"  # Netgear
+    swap = EPOCH + 55.0
+    for p in net.pkts:
+        if float(p.time) < swap:
+            continue
+        eth = p.getlayer(Ether)
+        if eth.src == GW[1]:
+            eth.src = new_mac
+        if eth.dst == GW[1]:
+            eth.dst = new_mac
+        arp = p.getlayer(ARP)
+        if arp is not None:
+            if arp.hwsrc == GW[1]:
+                arp.hwsrc = new_mac
+            if arp.hwdst == GW[1]:
+                arp.hwdst = new_mac
+    new_gw = (GW[0], new_mac)
+    net.gratuitous(55.2, new_gw)
+    for i, h in enumerate(HOSTS):  # devices notice the change and ask again; the new router answers
+        net.arp_exchange(58 + i * 0.5, h, new_gw)
+    return net
+
+
+def busy_browsing() -> Net:
+    """Harmless look-alike of a sweep: a laptop opens a news site that loads from 22 different servers."""
+    net = Net(14)
+    net.background(120)
+    for k in range(22):
+        ip = f"151.101.{(k * 37) % 250 + 1}.{(k * 11) % 250 + 2}"
+        net.tcp_session(30 + k * 0.4, LAPTOP, ip, rtt=0.03, segments=3)
+    return net
+
+
+def backup_dhcp() -> Net:
+    """Harmless look-alike of rogue DHCP: a second, correctly configured DHCP server (a Windows server)."""
+    net = Net(15)
+    net.background(120)
+    server2 = ("192.168.1.2", "00:15:5d:01:02:02")  # Microsoft Hyper-V
+    phone = ("192.168.1.77", "8c:85:90:12:34:77")
+    xid = 0x5A5A2002
+    chaddr = bytes.fromhex(phone[1].replace(":", "")) + b"\0" * 10
+    net.add(30.0, Ether(src=phone[1], dst=BCAST) / IP(src="0.0.0.0", dst="255.255.255.255") / UDP(sport=68, dport=67) /
+            BOOTP(op=1, xid=xid, chaddr=chaddr) / DHCP(options=[("message-type", "discover"), "end"]))
+    net.dhcp_reply(30.003, "offer", phone[1], phone[0], GW, GW[0], GW[0], xid)
+    net.dhcp_reply(30.006, "offer", phone[1], "192.168.1.150", server2, GW[0], GW[0], xid)
+    net.add(30.02, Ether(src=phone[1], dst=BCAST) / IP(src="0.0.0.0", dst="255.255.255.255") / UDP(sport=68, dport=67) /
+            BOOTP(op=1, xid=xid, chaddr=chaddr) / DHCP(options=[("message-type", "request"),
+                                                                 ("requested_addr", phone[0]), ("server_id", GW[0]), "end"]))
+    net.dhcp_reply(30.023, "ack", phone[1], phone[0], GW, GW[0], GW[0], xid)
+    net.dhcp_dora(80.0, "f4:f5:d8:ab:cd:78", "192.168.1.151", server2, GW[0], GW[0])
+    return net
+
+
 SCENARIOS: dict[str, tuple[Callable[[], Net], str, list[dict]]] = {
     "mixed_attack_and_fault.pcap": (mixed_attack_and_fault,
                                     "An attacker intercepts a laptop (and slows it down) while the NAS is down.",
@@ -430,6 +543,14 @@ SCENARIOS: dict[str, tuple[Callable[[], Net], str, list[dict]]] = {
                            {"kind": "slow_dns", "verdict": "fault"}]),
     "tcp_retransmissions.pcap": (tcp_retransmissions, "A laptop on weak Wi-Fi keeps losing packets.",
                                  [{"kind": "tcp_retransmissions", "verdict": "fault"}]),
+    "mtu.pcap": (mtu, "A link with a smaller MTU: big packets are rejected or silently dropped.",
+                 [{"kind": "mtu_mismatch", "verdict": "fault"}, {"kind": "mtu_mismatch", "verdict": "fault"}]),
+    "router_replacement.pcap": (router_replacement,
+                                "Tricky but harmless: the router was replaced, so its MAC address changed.",
+                                [{"kind": "ip_conflict", "verdict": "uncertain"}]),
+    "busy_browsing.pcap": (busy_browsing, "Tricky but harmless: a laptop loads a page from 22 servers at once.", []),
+    "backup_dhcp.pcap": (backup_dhcp, "Tricky but harmless: a second DHCP server with identical settings.",
+                         [{"kind": "rogue_dhcp", "verdict": "fault"}]),
     "malicious_xss_dnsname.pcap": (malicious_xss_dnsname,
                                    "Malicious input: DNS names containing <script> code (must display as text).",
                                    [{"kind": "dns_nxdomain", "verdict": "fault"}]),
