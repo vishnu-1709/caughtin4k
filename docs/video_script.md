@@ -1,4 +1,4 @@
-# CaughtIn4K demo video script (target 4:00, hard limit 5:00)
+# CaughtIn4K demo video script (target 3:45, hard limit 5:00)
 
 **Before recording:** open <https://caughtin4k.streamlit.app/> 5 minutes early and load one sample, because the free host
 sleeps when idle. Use a 1280-wide browser window at 100% zoom. Close other tabs. Speak slowly.
@@ -67,11 +67,6 @@ sleeps when idle. Use a 1280-wide browser window at 100% zoom. Close other tabs.
 *Action:* **Bad files** → `malformed_huge_record.pcap`.
 
 > "This file claims a single packet is 4 gigabytes. It's read safely and stops cleanly with a warning."
-
-*Action:* upload `samples/port_scan.pcap` (downloaded from GitHub), then open **Analysis log** under the verdict.
-
-> "This log is what really happened to the uploaded file: its type checked by magic bytes, its SHA-256 fingerprint,
-> parsed in a sandbox with memory and time limits, and, last line, the file deleted from the server."
 
 *Action:* open the **Security & privacy** tab on any result.
 

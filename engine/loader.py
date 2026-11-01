@@ -207,11 +207,8 @@ def quick_preview(path: str, max_mb: float, max_seconds: float = 5.0) -> dict[st
             break
     if count == 0:
         raise CaptureError("broken" if stats.truncated else "empty")
-    with open(path, "rb") as fh:
-        magic = fh.read(4).hex()
     return {
         "format": fmt,
-        "magic": magic,
         "size": os.path.getsize(path),
         "packets": count,
         "packets_estimate": bool(stats.stopped_reason),
