@@ -1,0 +1,24 @@
+{
+  "clean.pcap": {
+    "description": "A normal two-minute office capture with no problems.",
+    "expected": []
+  },
+  "arp_spoof.pcap": {
+    "description": "A device pretends to be the router to intercept a laptop's traffic.",
+    "expected": [
+      {
+        "kind": "arp_spoofing",
+        "verdict": "attack"
+      }
+    ]
+  },
+  "duplicate_ip.pcap": {
+    "description": "Two devices were given the same IP address by mistake.",
+    "expected": [
+      {
+        "kind": "duplicate_ip",
+        "verdict": "fault"
+      }
+    ]
+  }
+}
