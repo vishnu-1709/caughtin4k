@@ -26,12 +26,19 @@ def _ago(f: Finding, ctx: Context) -> str:
 def _arp(f: Finding, ctx: Context) -> Texts:
     d = f.details
     ips, new = d["ips"], d["new_mac"]
-    ip = ips[0]
+    ip = ctx.gateway_ip if d["gateway_involved"] else ips[0]
     orig = d["original_macs"][ip]
     who_new, who_orig = _mac_label(new), _mac_label(orig)
     gw = d["gateway_involved"]
     target = "your router" if gw else f"the device at {ip}"
-    victims = ", ".join(ctx.device_label(t) for t in d["targets"][:3]) or "devices on the network"
+    by_ip = d.get("targets_by_ip", {})
+    told = by_ip.get(ip) or d["targets"]
+    victims = ", ".join(ctx.device_label(t) for t in told[:3]) or "devices on the network"
+    also = [o for o in ips if o != ip]
+    also_txt = ""
+    if also:
+        to = ", ".join(ctx.device_label(t) for t in by_ip.get(also[0], [])[:2]) or "other devices"
+        also_txt = f" It also tells {to} that it is {', '.join(also)}, so both directions pass through it."
     tech_title_ip = ", ".join(ips)
     if f.verdict == "attack":
         return {
@@ -39,7 +46,7 @@ def _arp(f: Finding, ctx: Context) -> Texts:
             "title_technical": f"ARP spoofing of {tech_title_ip} by {new}",
             "explanation": (f"The device {who_new} keeps telling {victims} that it is {target}. "
                             f"Their traffic is then sent to it instead of the real owner ({who_orig}), "
-                            "so it can read or change that traffic (a man-in-the-middle attack)."),
+                            "so it can read or change that traffic (a man-in-the-middle attack)." + also_txt),
             "explanation_technical": (f"{d['claims']} ARP messages from {new} claim {tech_title_ip} "
                                       f"({d['unsolicited']} unsolicited replies, ~{d['rate_per_min']:.0f}/min, "
                                       f"{d['flips']} IP→MAC flips). Original owner: {orig}. Targets: "

@@ -130,6 +130,7 @@ class ArpDetector(Detector):
                     "both_send_traffic": all(mac in traffic[ip] and originals[ip] in traffic[ip] for ip in ips),
                     "failover_mac": any(m.startswith(FAILOVER_PREFIXES) for m in [mac, *originals.values()]),
                     "targets": targets[:20],
+                    "targets_by_ip": {ip: sorted(self.claims[ip][mac]["targets"] - {ip})[:10] for ip in ips},
                 },
             )
             f.add_evidence(frames)
