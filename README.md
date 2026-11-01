@@ -44,6 +44,7 @@ and **uncertain** in `router_replacement.pcap`.
   - **Evidence:** every cited packet in one searchable table, with Wireshark frame numbers.
   - **Security & privacy:** the file's SHA-256 fingerprint, the limits applied, and how the file was protected.
 - **What we checked:** every check shows *clear*, *found* or *no data in this capture*.
+- **Analysis log:** a terminal-style record of what really happened to the file: type check (magic bytes), SHA-256, sandbox limits, packets read, each finding, and the confirmed deletion of an upload.
 - **Proof, not just alerts:** e.g. it shows that an ARP impostor actually **relays** traffic (man in the middle) and
   **which device forged** DNS answers.
 - **Simple / Technical** wording, **Attacks / Faults / Uncertain** filter, **Hide IPs** (masks addresses everywhere, including downloads).

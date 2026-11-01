@@ -82,6 +82,18 @@ st.markdown("""<style>
 .ci-h {font-size:0.78rem; text-transform:uppercase; letter-spacing:0.05em; color:#94A3B8; margin:10px 0 3px 0; font-weight:600;}
 .ci-h.bad {color:#F97066;} .ci-h.good {color:#32D583;}
 .ci-why {border-left:1px dashed #1F2A44; padding-left:16px;}
+.ci-status {font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:0.78rem; color:#94A3B8;
+            border:1px solid #1F2A44; background:#070D18; border-radius:5px; padding:5px 10px; margin-bottom:10px;
+            display:flex; flex-wrap:wrap; gap:4px 16px;}
+.ci-status .on {color:#12B76A;} .ci-status b {color:#2DD4BF; font-weight:600;}
+.ci-term {font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:0.82rem; line-height:1.55;
+          background:#070D18; border:1px solid #1F2A44; border-left:3px solid #2DD4BF; border-radius:5px;
+          padding:10px 14px; white-space:pre-wrap; word-break:break-word; color:#CBD5E1; margin:0;}
+.ci-term .p {color:#2DD4BF;} .ci-term .ok {color:#12B76A;} .ci-term .warn {color:#F79009;}
+.ci-term .bad {color:#F04438;} .ci-term .unk {color:#98A2B3;} .ci-term .dim {color:#64748B;}
+[data-testid="stCode"] pre {background:#070D18 !important; border-left:3px solid #2DD4BF;}
+.ci-prompt {font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:0.78rem; color:#2DD4BF;
+            margin:8px 0 -6px 0;}
 @media (max-width: 760px) {.ci-tiles {grid-template-columns:repeat(3,1fr);} .ci-why {border:0; padding:0;}}
 @media (max-width: 640px) {.ci-checks {grid-template-columns:1fr;}}
 </style>""", unsafe_allow_html=True)
@@ -159,6 +171,7 @@ def run_upload(uploaded) -> tuple[Result, dict]:
         name = clean_text(os.path.basename(uploaded.name), 120)
         preview = quick_preview(path, MAX_MB)
         preview["name"] = name
+        preview["source"] = "upload"
         show_preview(preview)
         return analyse(path, name, preview), preview
     finally:
@@ -166,12 +179,15 @@ def run_upload(uploaded) -> tuple[Result, dict]:
             os.unlink(path)
         except OSError:
             pass
+        if "preview" in locals():
+            preview["deleted"] = not os.path.exists(path)  # verified, not assumed
 
 
 def run_sample(name: str) -> tuple[Result, dict]:
     path = os.path.join(SAMPLES, os.path.basename(name))
     preview = quick_preview(path, MAX_MB)
     preview["name"] = name
+    preview["source"] = "sample"
     show_preview(preview)
     return analyse(path, name, preview), preview
 
@@ -425,6 +441,8 @@ def evidence_tab(r: Result, technical: bool) -> None:
 
 
 def security_tab(r: Result, preview: dict) -> None:
+    html_block(analysis_log(r, preview))
+    st.write("")
     c1, c2 = st.columns([1.15, 1])
     with c1:
         st.markdown("**File fingerprint**")
@@ -525,6 +543,38 @@ def checks_and_coverage(r: Result) -> None:
                    + "".join(f"<li>{esc(i)}</li>" for i in items) + "</ul>")
 
 
+def analysis_log(r: Result, p: dict) -> str:
+    """Terminal-style log of what actually happened. Every line comes from real result values."""
+    lim = r.meta.get("limits", {})
+    lines: list[tuple[str, str]] = [("p", f"$ caughtin4k analyse {r.file_name}")]
+    src = "uploaded file (private temp file)" if p.get("source") == "upload" else "bundled sample"
+    lines.append(("ok", f"[ok] input: {src} · {fmt_size(r.file_size)} (limit {lim.get('max_file_mb', MAX_MB)} MB)"))
+    if p.get("magic"):
+        lines.append(("ok", f"[ok] file type: {r.file_format} (magic bytes {p['magic']})"))
+    if r.sha256:
+        lines.append(("ok", f"[ok] sha256 {r.sha256}"))
+    lines.append(("ok", f"[ok] sandboxed parser process: {lim.get('memory_limit_mb', '?')} MB memory, "
+                        f"{lim.get('subprocess_timeout', '?')} s hard timeout, {lim.get('max_packets', 0):,} packet cap"))
+    lines.append(("ok", f"[ok] {r.packets_read:,} packets read, {r.packets_skipped:,} skipped · "
+                        f"link type {', '.join(r.link_types) or 'unknown'} · {r.duration:.1f} s of traffic"))
+    for w in r.warnings:
+        lines.append(("warn", f"[!] {w}"))
+    lines.append(("dim", f"[..] {len(r.meta.get('detectors', []))} detectors ran · gateway {r.gateway_ip or 'not identified'}"))
+    tag = {"attack": ("bad", "[!!]"), "fault": ("warn", "[! ]"), "uncertain": ("unk", "[ ?]")}
+    for f in r.findings:
+        cls, mark = tag.get(f.verdict, ("unk", "[ ?]"))
+        lines.append((cls, f"{mark} {f.verdict.upper():9} {f.severity:8} {f.title_technical}"))
+    if not r.findings:
+        lines.append(("ok", "[ok] no faults or attacks found"))
+    ni, nc = len(r.findings), len(r.incidents)
+    lines.append(("ok", f"[ok] {ni} issue{'s' * (ni != 1)} grouped into {nc} incident{'s' * (nc != 1)} · "
+                        f"analysis took {r.elapsed:.2f} s"))
+    if p.get("source") == "upload":
+        lines.append(("ok", "[ok] uploaded file deleted from the server") if p.get("deleted")
+                     else ("warn", "[!] could not confirm the uploaded file was deleted"))
+    return '<div class="ci-term">' + "<br>".join(f'<span class="{c}">{esc(t)}</span>' for c, t in lines) + "</div>"
+
+
 def download_menu(view: Result, hide: bool) -> None:
     with st.popover("⬇ Download", width="stretch", help="HTML report, JSON or evidence CSV"):
         st.download_button("HTML report (printable)", to_html(view), file_name=safe_filename(view.file_name, ".html"),
@@ -563,14 +613,18 @@ def issue(f: Finding, r: Result, technical: bool, opened: bool) -> None:
                        + (f'<div class="ci-meta">Score: attack {f.details.get("score_attack", 0)} vs harmless '
                           f'{f.details.get("score_harmless", 0)}</div>' if "score_attack" in f.details else "")
                        + f'<div class="ci-h">Could it be harmless?</div><div>{esc(f.benign_alternative)}</div></div>')
+        html_block('<div class="ci-prompt">$ wireshark display filter — paste it to see these packets yourself</div>')
         st.code(f.wireshark_filter or "-", language=None)
         if st.toggle(f"Show the {len(f.evidence_frames)} evidence packets", key=f"ev_{f.id}"):
             evidence_table(f, r)
 
 
 # --------------------------------------------------------------------------- page
+html_block(f'<div class="ci-status"><span><span class="on">●</span> ONLINE</span><span><b>caughtin4k</b> v{esc(__version__)}</span>'
+           f'<span>offline analysis</span><span>{len(CHECKS)} checks</span><span>sandboxed parser</span>'
+           '<span>no data leaves this server</span></div>')
 html_block('<div class="ci-brand"><h1>CaughtIn4K</h1>'
-           f'<span class="ci-meta">Offline packet-capture diagnosis · {len(CHECKS)} checks · v{esc(__version__)}</span></div>')
+           '<span class="ci-meta">Packet-capture diagnosis for people without a network expert</span></div>')
 html_block('<div class="ci-tag">Upload a packet capture. Get the faults and attacks in it, explained in plain '
            'language, with the evidence and how to fix them.</div>')
 html_block('<div class="ci-privacy">🔒 Your file is analysed and deleted immediately. Nothing is stored. '
@@ -642,6 +696,8 @@ overview(view)
 for w in view.warnings:
     st.warning(w, icon="⚠️")
 checks_and_coverage(view)
+with st.expander("Analysis log", icon="🖥️"):
+    html_block(analysis_log(view, st.session_state["preview"]))
 
 c1, c2, c3, c4 = st.columns([2.3, 0.9, 1.25, 0.9], vertical_alignment="bottom")
 counts = result.counts()

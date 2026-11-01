@@ -146,7 +146,7 @@ def _port_scan(f: Finding, ctx: Context) -> Texts:
     return {
         "title_simple": title,
         "title_technical": f"TCP {'SYN ' if d['half_open'] else ''}port scan from {d['scanner']} "
-                           f"({d['ports_tried']} ports, {d['target_count']} hosts)",
+                           f"({d['ports_tried']} port{'s' * (d['ports_tried'] != 1)}, {d['target_count']} host{'s' * (d['target_count'] != 1)})",
         "explanation": (f"Within {d['duration']:.0f} seconds, {scanner} tried to connect to {what}. "
                         f"{d['closed'] + d['no_reply']} attempts were refused or ignored, which is what "
                         f"looking for open services looks like. Open services found: {open_txt}."),
