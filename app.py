@@ -20,6 +20,7 @@ import pandas as pd
 import streamlit as st
 
 from engine.analyze import Result, analyze_safe
+from engine.checks import CHECKS, check_status
 from engine.config import DEFAULTS
 from engine.findings import Finding
 from engine.loader import CaptureError, clean_text, quick_preview
@@ -50,6 +51,12 @@ st.markdown("""<style>
 .ci-card ol {margin:4px 0 0 0; padding-left:1.3rem;}
 .ci-muted {color:#94A3B8;}
 .ci-link {color:#2DD4BF; font-size:0.9rem;}
+.ci-pill {display:inline-block; border:1px solid #1F2A44; background:#111A2E; border-radius:4px; padding:3px 9px;
+          margin:3px 6px 3px 0; font-size:0.85rem;}
+.ci-dot {display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px;}
+.ci-checks {display:grid; grid-template-columns:1fr 1fr; gap:4px 28px;}
+.ci-checks div {font-size:0.9rem; padding:2px 0;}
+@media (max-width: 640px) {.ci-checks {grid-template-columns:1fr;}}
 </style>""", unsafe_allow_html=True)
 
 IP_OR_MAC = re.compile(r"((?:\d{1,3}\.){3}\d{1,3}|(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}|(?:IP|MAC)-\d+)")
@@ -301,6 +308,36 @@ def capture_stats(r: Result) -> None:
             st.dataframe(df, hide_index=True, width="stretch")
 
 
+STATUS_STYLE = {"clear": ("#12B76A", "clear"), "no_data": ("#475467", "no data in this capture")}
+
+
+def checks_overview() -> None:
+    """Front page: what CaughtIn4K looks for, in one compact block."""
+    def col(cat: str, title: str, color: str) -> str:
+        items = "".join(f'<div><span class="ci-dot" style="background:{color}"></span><b>{esc(c.name)}</b>'
+                        f' <span class="ci-muted">— {esc(c.blurb)}</span></div>' for c in CHECKS if c.category == cat)
+        return f'<div><div class="ci-muted" style="margin-bottom:4px">{title}</div>{items}</div>'
+    html_block('<div class="ci-muted" style="margin:10px 0 4px 0; font-weight:600">What CaughtIn4K checks</div>'
+               '<div class="ci-checks">' + col("attack", "Attacks", COLORS["attack"])
+               + col("fault", "Faults", COLORS["fault"]) + '</div>'
+               '<div class="ci-meta" style="margin-top:6px">Every issue is judged <b>attack</b>, <b>fault</b> or '
+               '<b>uncertain</b>, with the evidence for both sides, the likely cause and what to do.</div>')
+
+
+def checks_strip(r: Result) -> None:
+    """After analysis: one pill per check with its status."""
+    pills = []
+    for row in check_status(r):
+        if row["status"] == "found":
+            color, text = COLORS.get(row["verdict"], COLORS["uncertain"]), f"{row['count']} found"
+        else:
+            color, text = STATUS_STYLE[row["status"]]
+        pills.append(f'<span class="ci-pill" title="{esc(row["blurb"])}"><span class="ci-dot" '
+                     f'style="background:{color}"></span>{esc(row["name"])} '
+                     f'<span class="ci-muted">· {esc(text)}</span></span>')
+    html_block('<div class="ci-muted" style="margin:4px 0 2px 0">What we checked</div><div>' + "".join(pills) + "</div>")
+
+
 def capture_guide(expanded: bool) -> None:
     with st.expander("How to record a capture (Wireshark, 3 steps)", expanded=expanded):
         st.markdown(
@@ -341,8 +378,9 @@ else:
 
 if key is None:
     st.session_state.pop("result", None)
-    capture_guide(expanded=True)
     st.info("No file yet. Upload a capture, or pick a sample on the right to see how CaughtIn4K works.")
+    capture_guide(expanded=True)
+    checks_overview()
     st.stop()
 
 capture_guide(expanded=False)
@@ -385,6 +423,7 @@ if hide:
 
 banner(view)
 metrics(view)
+checks_strip(view)
 coverage(view)
 
 c1, c2, c3 = st.columns([2.2, 1, 1.2])

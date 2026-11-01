@@ -54,7 +54,8 @@ def group(findings: list[Finding], ctx: Context) -> list[Incident]:
     ignore = {ctx.gateway_ip, ctx.gateway_mac, None, "?"}
     for i, a in enumerate(findings):
         for b in findings[i + 1:]:
-            if _overlap(a, b) and (set(a.hosts) & set(b.hosts)) - ignore:
+            same_subject = bool(a.hosts and b.hosts and a.hosts[0] == b.hosts[0])  # e.g. two problems of one server
+            if _overlap(a, b) and ((set(a.hosts) & set(b.hosts)) - ignore or same_subject):
                 union(a.id, b.id)
 
     links = _causal_links(findings)
