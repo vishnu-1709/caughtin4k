@@ -544,7 +544,7 @@ def sample_picker(labels: dict) -> str:
 
 
 # --------------------------------------------------------------------------- page
-html_block('<div class="ci-brand"><h1>🔎 CaughtIn4K</h1>'
+html_block('<div class="ci-brand"><h1>CaughtIn4K</h1>'
            f'<span class="ci-meta">Offline packet-capture diagnosis · {len(CHECKS)} checks · v{esc(__version__)}</span></div>')
 html_block('<div class="ci-tag">Upload a packet capture. Get the faults and attacks in it, explained in plain '
            'language, with the evidence and how to fix them.</div>')
